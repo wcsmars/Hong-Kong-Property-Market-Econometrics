@@ -16,16 +16,23 @@ Implements, from first principles:
     r2 - r1 ≥ r0 (double-sup).
   * BSADF sequence: for each endpoint r2, the backward sup ADF — used for
     real-time date-stamping of bubble origination/termination.
-  * Monte-Carlo critical values (null: driftless random walk), including a
-    per-endpoint critical-value *sequence* for date-stamping.
-  * A wild-bootstrap p-value for the GSADF statistic, robust to
-    unconditional heteroskedasticity (in the spirit of Phillips & Shi,
-    2020, who show volatility shifts oversize the asymptotic test).
+  * Monte-Carlo critical values, including a per-endpoint critical-value
+    *sequence* for date-stamping. The null is a driftless unit-root process
+    whose changes are iid N(0,1) or follow a given AR model, and the null
+    statistics use the same lag order k as the tested statistic.
+  * A wild-bootstrap p-value and critical values for GSADF/BSADF. The changes
+    are rebuilt recursively from the fitted null autoregression, as in
+    Phillips & Shi (2020), with each residual multiplied by a random weight
+    at its own date (the time-aligned wild bootstrap of Harvey, Leybourne,
+    Sollis & Taylor, 2016). The bootstrap therefore keeps both the short-run
+    dynamics and the time profile of volatility, which oversizes the
+    Monte-Carlo test. The GSADF critical value is the quantile of the maximum
+    over all endpoints; the BSADF sequence is pointwise, per endpoint.
 
-For the k = 0 case (used in all simulation loops, as in PSY's own critical
-value computations) the windowed ADF statistic is computed in O(1) per
-window from prefix sums, which makes the O(T²)-window double-sup feasible
-inside Monte-Carlo loops:
+For k = 0 and k = 1, which are the lag orders the simulation loops use, the
+windowed ADF statistic is computed in O(1) per window from prefix sums, which
+makes the O(T²)-window double-sup feasible inside Monte-Carlo loops. For
+k = 0:
 
     regression sample for window [s, e]:  t = s+1, …, e   (n = e - s obs)
     x_t = y_{t-1},  d_t = Δy_t
@@ -34,9 +41,18 @@ inside Monte-Carlo loops:
     RSS = S_dd − α̂ S_d − β̂ S_xd          (since RSS = d'd − b̂'X'd)
     se(β̂) = sqrt( σ̂² n / (n·S_xx − S_x²) ),  σ̂² = RSS/(n−2)
 
+For k = 1 the regression sample is t = s+2, …, e (n = e − s − 1) with the
+extra regressor z_t = Δy_{t-1}. With intercept-centred moments
+C_ab = S_ab − S_a S_b / n, the two-regressor OLS gives
+
+    D  = C_xx C_zz − C_xz²,   β̂ = (C_zz C_xd − C_xz C_zd) / D,
+    ψ̂  = (C_xx C_zd − C_xz C_xd) / D,
+    RSS = C_dd − β̂ C_xd − ψ̂ C_zd,   se(β̂) = sqrt( σ̂² C_zz / D ),  σ̂² = RSS/(n−3).
+
 All prefix sums are over the full series, so each window statistic is a
-handful of float ops. Everything is JIT-compiled with numba; the Monte-Carlo
-loop is parallelised with prange.
+handful of float ops. The general k-lag routine solves the normal equations
+directly and is used for the observed statistics. Everything is JIT-compiled
+with numba; the Monte-Carlo and bootstrap loops are parallelised with prange.
 """
 from __future__ import annotations
 
@@ -96,6 +112,105 @@ def _adf_window_k0(Sx, Sxx, Sd, Sxd, Sdd, s, e):
     if se <= 0.0:
         return -np.inf
     return beta / se
+
+
+@njit(cache=True)
+def _prefix_sums_k1(y):
+    """Prefix sums for the k = 1 windowed ADF.
+
+    sums[t] aggregates regression observations 2..t built on
+    x_t = y[t-1], z_t = y[t-1] - y[t-2], d_t = y[t] - y[t-1].
+    """
+    T = y.shape[0]
+    out = np.zeros((9, T))  # Sx, Sz, Sd, Sxx, Szz, Sxz, Sxd, Szd, Sdd
+    for t in range(2, T):
+        x = y[t - 1]
+        z = y[t - 1] - y[t - 2]
+        d = y[t] - y[t - 1]
+        out[0, t] = out[0, t - 1] + x
+        out[1, t] = out[1, t - 1] + z
+        out[2, t] = out[2, t - 1] + d
+        out[3, t] = out[3, t - 1] + x * x
+        out[4, t] = out[4, t - 1] + z * z
+        out[5, t] = out[5, t - 1] + x * z
+        out[6, t] = out[6, t - 1] + x * d
+        out[7, t] = out[7, t - 1] + z * d
+        out[8, t] = out[8, t - 1] + d * d
+    return out
+
+
+@njit(cache=True)
+def _adf_window_k1(P, s, e):
+    """ADF t-stat on window [s, e] (0-based, inclusive), k = 1, via prefix sums."""
+    n = float(e - s - 1)          # observations t = s+2 .. e
+    if n < 5.0:
+        return -np.inf
+    a, b = e, s + 1
+    sx = P[0, a] - P[0, b]
+    sz = P[1, a] - P[1, b]
+    sd = P[2, a] - P[2, b]
+    cxx = (P[3, a] - P[3, b]) - sx * sx / n
+    czz = (P[4, a] - P[4, b]) - sz * sz / n
+    cxz = (P[5, a] - P[5, b]) - sx * sz / n
+    cxd = (P[6, a] - P[6, b]) - sx * sd / n
+    czd = (P[7, a] - P[7, b]) - sz * sd / n
+    cdd = (P[8, a] - P[8, b]) - sd * sd / n
+    det = cxx * czz - cxz * cxz
+    if det <= 1e-12 or czz <= 0.0:
+        return -np.inf
+    beta = (czz * cxd - cxz * czd) / det
+    psi = (cxx * czd - cxz * cxd) / det
+    rss = cdd - beta * cxd - psi * czd
+    if rss <= 0.0:
+        return -np.inf
+    se = np.sqrt(rss / (n - 3.0) * czz / det)
+    if se <= 0.0:
+        return -np.inf
+    return beta / se
+
+
+@njit(cache=True)
+def _bsadf_fast_k0(y, w0, out):
+    """Fill out[e] with BSADF_e for k = 0 (prefix-sum path); return the max."""
+    T = y.shape[0]
+    Sx, Sxx, Sd, Sxd, Sdd = _prefix_sums(y)
+    best_all = -np.inf
+    for e in range(w0 - 1, T):
+        best = -np.inf
+        for s in range(0, e - w0 + 2):
+            stat = _adf_window_k0(Sx, Sxx, Sd, Sxd, Sdd, s, e)
+            if stat > best:
+                best = stat
+        out[e] = best
+        if best > best_all:
+            best_all = best
+    return best_all
+
+
+@njit(cache=True)
+def _bsadf_fast_k1(y, w0, out):
+    """Fill out[e] with BSADF_e for k = 1 (prefix-sum path); return the max."""
+    T = y.shape[0]
+    P = _prefix_sums_k1(y)
+    best_all = -np.inf
+    for e in range(w0 - 1, T):
+        best = -np.inf
+        for s in range(0, e - w0 + 2):
+            stat = _adf_window_k1(P, s, e)
+            if stat > best:
+                best = stat
+        out[e] = best
+        if best > best_all:
+            best_all = best
+    return best_all
+
+
+@njit(cache=True)
+def _bsadf_fast(y, w0, k, out):
+    """Fill out[e] with BSADF_e (k = 0 or 1, prefix-sum path); return the max."""
+    if k == 0:
+        return _bsadf_fast_k0(y, w0, out)
+    return _bsadf_fast_k1(y, w0, out)
 
 
 @njit(cache=True)
@@ -242,31 +357,38 @@ def sadf(y: np.ndarray, k: int = 0, w0: int | None = None) -> float:
 
 
 @njit(cache=True, parallel=True)
-def _mc_null_bsadf(T, w0, n_reps, seed):
-    """BSADF_t sequences under H0: y_t = y_{t-1} + ε_t, ε ~ iid N(0,1).
+def _mc_null_bsadf(T, w0, n_reps, seed, k, psi):
+    """BSADF_t sequences under H0: y_t = y_{t-1} + u_t with
+    u_t = Σ_i psi_i u_{t-i} + ε_t, ε ~ iid N(0,1) (u = ε when psi is empty).
 
-    Returns (n_reps, T) matrix of null BSADF sequences (k = 0, as in PSY's
-    own critical-value simulations).
+    The null statistics use k lagged differences (k = 0 or 1).
+    Returns the (n_reps, T) matrix of null BSADF sequences.
     """
+    p = psi.shape[0]
     out = np.full((n_reps, T), -np.inf)
     for r in prange(n_reps):
         np.random.seed(seed + r)
         eps = np.random.standard_normal(T)
-        y = np.cumsum(eps)
-        Sx, Sxx, Sd, Sxd, Sdd = _prefix_sums(y)
-        for e in range(w0 - 1, T):
-            best = -np.inf
-            for s in range(0, e - w0 + 2):
-                stat = _adf_window_k0(Sx, Sxx, Sd, Sxd, Sdd, s, e)
-                if stat > best:
-                    best = stat
-            out[r, e] = best
+        u = np.empty(T)
+        for t in range(T):
+            v = eps[t]
+            for i in range(1, p + 1):
+                if t - i >= 0:
+                    v += psi[i - 1] * u[t - i]
+            u[t] = v
+        y = np.cumsum(u)
+        _bsadf_fast(y, w0, k, out[r])
     return out
 
 
 def mc_critical_values(T: int, w0: int | None = None, n_reps: int = 999,
-                       quantiles=(0.90, 0.95, 0.99), seed: int = 42):
+                       quantiles=(0.90, 0.95, 0.99), seed: int = 42,
+                       k: int = 0, psi=None):
     """Monte-Carlo critical values for GSADF and the BSADF date-stamping sequence.
+
+    k is the lag order of the null ADF regressions (0 or 1) and should match
+    the tested statistic. psi, if given, are AR coefficients for the changes
+    of the unit-root null; the default is an iid random walk.
 
     Returns
     -------
@@ -275,9 +397,12 @@ def mc_critical_values(T: int, w0: int | None = None, n_reps: int = 999,
       'bsadf_cv_seq': {q: (T,) array} per-endpoint critical values for BSADF_t
       'null_gsadf'  : (n_reps,) simulated null GSADF distribution
     """
+    if k not in (0, 1):
+        raise ValueError("Monte-Carlo nulls support k = 0 or 1")
     if w0 is None:
         w0 = min_window(T)
-    null_seq = _mc_null_bsadf(T, w0, n_reps, seed)
+    psi = np.zeros(0) if psi is None else np.asarray(psi, dtype=np.float64)
+    null_seq = _mc_null_bsadf(T, w0, n_reps, seed, k, psi)
     null_gsadf = np.max(null_seq, axis=1)
     gsadf_cv = {q: float(np.quantile(null_gsadf, q)) for q in quantiles}
     bsadf_cv_seq = {}
@@ -286,60 +411,92 @@ def mc_critical_values(T: int, w0: int | None = None, n_reps: int = 999,
         cv[w0 - 1:] = np.quantile(null_seq[:, w0 - 1:], q, axis=0)
         bsadf_cv_seq[q] = cv
     return {"gsadf_cv": gsadf_cv, "bsadf_cv_seq": bsadf_cv_seq,
-            "null_gsadf": null_gsadf, "w0": w0}
+            "null_gsadf": null_gsadf, "w0": w0, "k": k, "n_reps": n_reps,
+            "psi": psi.tolist()}
 
 
 # --------------------------------------------------------------------------
-# Wild bootstrap (heteroskedasticity-robust GSADF inference)
+# Wild bootstrap (AR null as in Phillips & Shi, 2020; time-aligned weights)
 # --------------------------------------------------------------------------
+
+
+def fit_null_ar(y: np.ndarray, p: int):
+    """OLS of Δy_t on an intercept and p own lags (the unit-root null).
+
+    Returns (psi, resid): psi has p coefficients; resid (length T-1-p) are the
+    residuals for t = p+1 … T-1 (in Δy indexing), mean zero by construction.
+    """
+    dy = np.diff(np.asarray(y, dtype=np.float64))
+    if p == 0:
+        return np.zeros(0), dy - dy.mean()
+    X = np.column_stack([np.ones(len(dy) - p)]
+                        + [dy[p - i:len(dy) - i] for i in range(1, p + 1)])
+    coef = np.linalg.lstsq(X, dy[p:], rcond=None)[0]
+    return coef[1:], dy[p:] - X @ coef
 
 
 @njit(cache=True, parallel=True)
-def _wild_bootstrap_gsadf(eps_hat, w0, n_reps, seed):
-    """Wild bootstrap of the GSADF statistic.
+def _wild_bootstrap_gsadf(dy_init, psi, resid, w0, n_reps, seed, k):
+    """Wild bootstrap of the GSADF statistic and BSADF sequence.
 
-    Null is imposed by building y*_t = Σ_{s≤t} w_s ε̂_s with w_s iid N(0,1),
-    where ε̂ are the demeaned first differences of the observed series. The
-    resampled series inherits the *time profile* of the observed volatility,
-    so the bootstrap distribution is robust to unconditional variance shifts
-    (Phillips & Shi, 2020).
-    Returns (n_reps,) of null GSADF stats and (n_reps, T) BSADF sequences.
+    Bootstrap changes follow Δy*_t = Σ_i psi_i Δy*_{t-i} + w_t ê_t, with
+    w_t iid N(0,1), the first p changes set to their observed values
+    (dy_init), and no drift; y*_t accumulates them. With p = 0 this is
+    y*_t = Σ_{s≤t} w_s ê_s on the demeaned changes. Each residual keeps its
+    own date (Harvey, Leybourne, Sollis & Taylor, 2016), so the resampled
+    series keeps the time profile of the observed volatility; the fitted
+    autoregression (Phillips & Shi, 2020) keeps its short-run dynamics.
+    Statistics use k lagged differences (k = 0 or 1).
+    Returns (n_reps,) null GSADF stats and (n_reps, T) BSADF sequences.
     """
-    T = eps_hat.shape[0] + 1
+    p = psi.shape[0]
+    n_e = resid.shape[0]
+    T = n_e + p + 1
     stats = np.empty(n_reps)
     seqs = np.full((n_reps, T), -np.inf)
     for r in prange(n_reps):
         np.random.seed(seed + 7919 * r)
-        w = np.random.standard_normal(T - 1)
+        w = np.random.standard_normal(n_e)
+        dy = np.empty(T - 1)
+        for t in range(p):
+            dy[t] = dy_init[t]
+        for j in range(n_e):
+            t = p + j
+            v = w[j] * resid[j]
+            for i in range(1, p + 1):
+                v += psi[i - 1] * dy[t - i]
+            dy[t] = v
         y = np.empty(T)
         y[0] = 0.0
         for t in range(1, T):
-            y[t] = y[t - 1] + w[t - 1] * eps_hat[t - 1]
-        Sx, Sxx, Sd, Sxd, Sdd = _prefix_sums(y)
-        best_all = -np.inf
-        for e in range(w0 - 1, T):
-            best = -np.inf
-            for s in range(0, e - w0 + 2):
-                stat = _adf_window_k0(Sx, Sxx, Sd, Sxd, Sdd, s, e)
-                if stat > best:
-                    best = stat
-            seqs[r, e] = best
-            if best > best_all:
-                best_all = best
-        stats[r] = best_all
+            y[t] = y[t - 1] + dy[t - 1]
+        stats[r] = _bsadf_fast(y, w0, k, seqs[r])
     return stats, seqs
 
 
 def wild_bootstrap_gsadf(y: np.ndarray, k: int = 0, w0: int | None = None,
                          n_reps: int = 499, seed: int = 7,
-                         quantiles=(0.90, 0.95, 0.99)):
-    """Wild-bootstrap p-value for GSADF + bootstrap BSADF critical-value sequence."""
+                         quantiles=(0.90, 0.95, 0.99), ar_lags: int | None = None):
+    """Wild-bootstrap p-value for GSADF + bootstrap BSADF critical-value sequence.
+
+    k is the lag order of the ADF regressions (observed and bootstrap, 0 or 1).
+    ar_lags is the order of the null autoregression for Δy used to rebuild the
+    bootstrap changes (default k, as in Phillips & Shi, 2020). The BSADF
+    critical-value sequence is pointwise (per endpoint), with no correction
+    for testing many endpoints; gsadf_cv, the quantile of each draw's maximum,
+    is the whole-sample (family-wise) critical value.
+    """
+    if k not in (0, 1):
+        raise ValueError("the bootstrap supports k = 0 or 1")
     y = np.asarray(y, dtype=np.float64)
     T = len(y)
     if w0 is None:
         w0 = min_window(T)
-    eps_hat = np.diff(y) - np.mean(np.diff(y))
-    null_stats, null_seqs = _wild_bootstrap_gsadf(eps_hat, w0, n_reps, seed)
+    p = k if ar_lags is None else ar_lags
+    psi, resid = fit_null_ar(y, p)
+    dy_init = np.diff(y)[:p].copy()
+    null_stats, null_seqs = _wild_bootstrap_gsadf(dy_init, psi, resid, w0,
+                                                  n_reps, seed, k)
     obs = gsadf(y, k=k, w0=w0)
     pval = float((np.sum(null_stats >= obs) + 1) / (n_reps + 1))
     bsadf_cv_seq = {}
@@ -348,7 +505,9 @@ def wild_bootstrap_gsadf(y: np.ndarray, k: int = 0, w0: int | None = None,
         cv[w0 - 1:] = np.quantile(null_seqs[:, w0 - 1:], q, axis=0)
         bsadf_cv_seq[q] = cv
     return {"gsadf_obs": obs, "pvalue": pval, "null_gsadf": null_stats,
-            "bsadf_cv_seq": bsadf_cv_seq, "w0": w0}
+            "gsadf_cv": {q: float(np.quantile(null_stats, q)) for q in quantiles},
+            "bsadf_cv_seq": bsadf_cv_seq, "w0": w0, "k": k, "ar_lags": p,
+            "psi": psi.tolist(), "n_reps": n_reps}
 
 
 # --------------------------------------------------------------------------

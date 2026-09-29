@@ -59,6 +59,7 @@ for name, r in bb.items():
         "Series": r["desc"], "T": r["T"], "SADF": round(r["sadf"], 3),
         "GSADF": round(r["gsadf"], 3),
         "CV 90/95/99": f"{r['mc_cv']['0.9']:.2f} / {r['mc_cv']['0.95']:.2f} / {r['mc_cv']['0.99']:.2f}",
+        "MC p": round(r["mc_pvalue"], 3),
         "WB p": round(r["wb_pvalue"], 3),
         "Episodes (MC, 95%)": "; ".join(f"{e['start'][:7]}→{e['end'][:7]}"
                                         for e in r["episodes"]) or "—",
@@ -75,7 +76,8 @@ for sname, sp in lr["specs"].items():
         rows.append({
             "Spec": sname, "Sample": tag, "n": o["n"],
             "Bounds F": o["bounds_F"],
-            "I(1) cv95": o["bounds_cv95"][1],
+            "F I(1) cv95": o["bounds_cv95"][1],
+            "PSS t (5% I0/I1)": f"{o['bounds_t']} ({o['bounds_t_cv95'][0]}/{o['bounds_t_cv95'][1]})",
             "I(1) p": o["bounds_p"][1],
             "DOLS β (t)": "; ".join(f"{k}: {v} ({o['dols_t'][k]})"
                                     for k, v in o["dols_beta"].items()),
@@ -94,7 +96,8 @@ for sname, sp in lr["specs"].items():
             rows.append({"Spec": sname, "GH model": model, "inf-ADF": sp[k]["stat"],
                          "Break": sp[k]["break"], "5% cv": sp[k]["cv05"],
                          "Reject@5%": sp[k]["reject_5pct"],
-                         "Bai-Perron ECT breaks": ", ".join(sp.get("bp_breaks", []))})
+                         "Bai-Perron ECT breaks": ", ".join(sp.get("bp_breaks", []))
+                         + (" (capped at 5)" if sp.get("bp_capped") else "")})
 w("t4b_gh.md", pd.DataFrame(rows).to_markdown(index=False))
 jo = pd.read_csv(os.path.join(OUTD, "johansen.csv"), index_col=0).round(2)
 w("t4c_johansen.md", jo.to_markdown())
@@ -115,10 +118,11 @@ for shock in ["tightening", "ease"]:
         for h in [0, 4, 8, 12, 24]:
             if h in irf.index:
                 r = irf.loc[h]
-                sig = "*" if (r["lo95"] > 0 or r["hi95"] < 0) else ""
+                sig = "*" if r["p"] <= 0.05 else ""
                 lp_rows.append({"Shock": shock, "Response": f"cum. log {dep}",
                                 "h": h, "β_h": round(r["beta"], 3),
-                                "95% CI": f"[{r['lo95']:.3f}, {r['hi95']:.3f}]{sig}"})
+                                "placebo p": round(r["p"], 3),
+                                "95% CI (placebo)": f"[{r['lo95']:.3f}, {r['hi95']:.3f}]{sig}"})
 w("t5b_lp.md", pd.DataFrame(lp_rows).to_markdown(index=False))
 
 # T6 forecast -----------------------------------------------------------------------

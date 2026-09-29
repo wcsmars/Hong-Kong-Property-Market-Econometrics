@@ -3,17 +3,23 @@ breaks.py — Structural change and the decentralisation gradient.
 
 (a) Bai-Perron multiple mean-shift breaks (hand-rolled dynamic programme,
     BIC-selected number of breaks, 15% trimming) on:
-      - monthly Grade A real rent growth (1993-07+),
-      - the Central premium: log(avg Grade A rent Central / KwunTong), 1999+.
+      - monthly Grade A real rent growth (1993-02+),
+      - the Central premium: log(avg Grade A rent Central / KwunTong),
+        2013-02+ (Kwun Tong enters the district panel then).
 (b) Markov-switching mean-variance model (Hamilton 1989) on monthly Grade A
     rent growth, with a seeded start-parameter search so reruns reproduce
     it; smoothed regime probabilities saved for the figure.
 (c) District convergence (Grade A, monthly average rents 1999+, 7 districts):
-      - sigma-convergence: cross-sectional dispersion of log rent relatives,
-        over all observed districts and over balanced panels that hold the
-        district set fixed (Kwun Tong enters in 2013-02; Mong Kok has gaps);
+      - sigma-convergence: cross-sectional std of the non-Central districts'
+        log rents relative to Central, over all observed districts and over
+        balanced panels that hold the district set fixed (Kwun Tong enters in
+        2013-02; Mong Kok, Sheung Wan and Quarry Bay have gaps). The pre-2019
+        vs 2019+ change in mean dispersion is tested by a HAC regression on a
+        2019+ dummy; Levene's test compares only its variability;
       - beta-convergence: Δ ln(rent_d / rent_Central) on lagged level;
-      - pairwise Engle-Granger cointegration of each district with Central.
+      - pairwise Engle-Granger cointegration of each district with Central,
+        on the longest run of consecutive months after filling interior gaps
+        of up to three months.
 
 Outputs: output/breaks.json, output/ms_probs.csv, output/sigma_path.csv,
          output/breaks_log.txt
@@ -138,24 +144,55 @@ def markov(panel: pd.DataFrame, seed: int = 0) -> dict:
 
 
 # ------------------------------------------------------------ convergence
-def sigma_split(rel: pd.DataFrame) -> tuple[pd.Series, dict]:
-    """Cross-sectional std of log rent relatives, pre-2019 vs 2019+ (Levene).
+def sigma_split(rel: pd.DataFrame, hac_lags: int = 12) -> tuple[pd.Series, dict]:
+    """Cross-sectional std of log rent relatives, pre-2019 vs 2019+.
 
-    The std runs over whichever columns are observed in a month, so pass a
-    balanced frame (only months with every district observed) to hold the
-    district set fixed.
+    `rel` holds each non-Central district's log rent minus Central's, so the
+    std runs over those relatives ("districts" lists the panel, Central
+    included; "relatives" the columns the std uses). It runs over whichever
+    columns are observed in a month, so pass a balanced frame (only months
+    with every district observed) to hold the district set fixed.
+
+    The change in mean dispersion is tested by regressing sigma_t on a 2019+
+    dummy with Newey-West (HAC) errors, because sigma_t is highly
+    autocorrelated. Levene's p-value tests only whether sigma_t is equally
+    variable in the two periods.
     """
     sigma = rel.std(axis=1).dropna()
-    pre = sigma[sigma.index < "2019-01-01"]
-    post = sigma[sigma.index >= "2019-01-01"]
+    post_dummy = (sigma.index >= "2019-01-01").astype(float)
+    pre = sigma[post_dummy == 0]
+    post = sigma[post_dummy == 1]
     lev = stats.levene(pre, post)
+    hac = sm.OLS(sigma.values, sm.add_constant(post_dummy)).fit(
+        cov_type="HAC", cov_kwds={"maxlags": hac_lags})
     return sigma, {
         "districts": ["Central"] + [c.removeprefix("ar_A_") for c in rel.columns],
+        "relatives": [c.removeprefix("ar_A_") for c in rel.columns],
         "start": str(sigma.index[0].date()), "end": str(sigma.index[-1].date()),
         "n_pre2019": int(len(pre)), "n_post2019": int(len(post)),
         "pre2019_mean": float(pre.mean()), "post2019_mean": float(post.mean()),
+        "mean_change": float(hac.params[1]), "mean_change_hac_t": float(hac.tvalues[1]),
+        "mean_change_hac_p": float(hac.pvalues[1]), "hac_lags": hac_lags,
         "levene_p": float(lev.pvalue),
     }
+
+
+def fill_short_gaps(s: pd.Series, limit: int = 3) -> pd.Series:
+    """Linearly fill interior gaps of at most `limit` consecutive months."""
+    missing = s.isna()
+    run = (missing != missing.shift()).cumsum()
+    run_len = missing.groupby(run).transform("sum")
+    filled = s.interpolate(limit_area="inside")
+    return s.where(~(missing & (run_len <= limit)), filled)
+
+
+def longest_complete_run(frame: pd.DataFrame) -> pd.DataFrame:
+    """Longest stretch of consecutive rows with every column observed."""
+    ok = frame.notna().all(axis=1)
+    run = (ok != ok.shift()).cumsum()
+    sizes = ok[ok].groupby(run[ok]).size()
+    rows = ok[ok][run[ok] == sizes.idxmax()].index
+    return frame.loc[rows[0]:rows[-1]]
 
 
 def convergence(dist: pd.DataFrame) -> dict:
@@ -179,9 +216,10 @@ def convergence(dist: pd.DataFrame) -> dict:
     for name, frame in frames.items():
         paths[f"sigma_{name}"], s = sigma_split(frame)
         sig[f"sigma_{name}"] = s
-        log(f"sigma-convergence [{name}, {s['start'][:7]}+, {len(s['districts'])} districts]: "
+        log(f"sigma-convergence [{name}, {s['start'][:7]}+, {len(s['districts'])} districts, "
+            f"{len(s['relatives'])} relatives to Central]: "
             f"mean pre-2019={s['pre2019_mean']:.4f}, post={s['post2019_mean']:.4f} "
-            f"(Levene p={s['levene_p']:.4f})")
+            f"(HAC p={s['mean_change_hac_p']:.4f}; Levene p={s['levene_p']:.4f})")
     pd.DataFrame(paths).rename_axis(rel.index.name).to_csv(
         os.path.join(OUT, "sigma_path.csv"))
 
@@ -197,14 +235,19 @@ def convergence(dist: pd.DataFrame) -> dict:
     log(f"beta-convergence: β={beta.params['lag']:.4f} "
         f"(t={beta.tvalues['lag']:.2f}), half-life={hl:.0f}m")
 
-    # pairwise Engle-Granger with Central + Central premium trend
+    # pairwise Engle-Granger with Central + Central premium trend. The test's
+    # lags assume consecutive months, so short gaps are filled and the test
+    # runs on the longest complete stretch rather than across longer holes.
     pairs = {}
     for d in DISTRICTS:
         if d == "Central" or f"ar_A_{d}" not in lr.columns:
             continue
-        sub = lr[[f"ar_A_{d}", "ar_A_Central"]].dropna()
+        raw = lr[[f"ar_A_{d}", "ar_A_Central"]]
+        sub = longest_complete_run(raw.apply(fill_short_gaps))
         t, p, _ = coint(sub[f"ar_A_{d}"], sub["ar_A_Central"])
-        pairs[d] = {"eg_t": float(t), "eg_p": float(p), "n": int(len(sub))}
+        pairs[d] = {"eg_t": float(t), "eg_p": float(p), "n": int(len(sub)),
+                    "start": str(sub.index[0].date()), "end": str(sub.index[-1].date()),
+                    "months_filled": int(raw.loc[sub.index].isna().any(axis=1).sum())}
     log("pairwise EG vs Central: " +
         ", ".join(f"{d}: p={v['eg_p']:.3f}" for d, v in pairs.items()))
 
@@ -238,7 +281,9 @@ def main():
     results["markov"] = markov(panel)
     results["convergence"] = convergence(dist)
     with open(os.path.join(OUT, "breaks.json"), "w") as f:
-        json.dump(results, f, indent=2, default=float)
+        clean = json.loads(json.dumps(results, default=float),
+                           parse_constant=lambda _: None)
+        json.dump(clean, f, indent=2, allow_nan=False)
     with open(os.path.join(OUT, "breaks_log.txt"), "w") as f:
         f.write("\n".join(LOG))
 

@@ -3,7 +3,8 @@ test_psy.py — Validation of the PSY implementation before it touches real data
 
 1. EXACTNESS: windowed ADF statistic must match statsmodels.adfuller
    (regression='c', fixed lag) to ~1e-8 on identical samples, for k = 0
-   and k > 0, full-sample and subsample windows.
+   and k > 0, full-sample and subsample windows, including the k = 0 and
+   k = 1 prefix-sum paths used inside the simulations.
 2. POWER: a series with a known embedded explosive episode
    (y_t = 1.04·y_{t-1} + ε_t for t ∈ [120, 160)) must be flagged by GSADF
    at the 95% MC critical value, and date-stamping must locate the episode
@@ -52,6 +53,16 @@ fast = psy.adf_stat(y, k=0, s=30, e=250)
 gen = psy._adf_window_klags(y, 30, 250, 0)
 check("k=0 fast path == general path", abs(fast - gen) < 1e-9,
       f"fast={fast:.12f} gen={gen:.12f}")
+
+# k=1 prefix-sum path (used by the Monte-Carlo nulls and bootstraps) must
+# agree with the general path and statsmodels
+P1 = psy._prefix_sums_k1(y)
+fast1 = psy._adf_window_k1(P1, 30, 250)
+gen1 = psy._adf_window_klags(y, 30, 250, 1)
+sm1 = adfuller(y[30:251], maxlag=1, regression="c", autolag=None)[0]
+check("k=1 fast path == general path == statsmodels",
+      max(abs(fast1 - gen1), abs(fast1 - sm1)) < 1e-9,
+      f"fast={fast1:.12f} gen={gen1:.12f} sm={sm1:.12f}")
 
 # ---------------------------------------------------------------- power
 # PSY-style DGP: random walk with a non-trivial initial level (y_0 = 50, as

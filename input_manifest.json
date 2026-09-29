@@ -467,7 +467,7 @@
         },
         {
           "path": "data/raw/rvd/his_data_6.xls",
-          "description": "Office average rents by grade and district; monthly and annual analysis inputs.",
+          "description": "Office average rents by grade and district; monthly analysis input.",
           "sha256": "00e860a5b56fe1ee714eeb7af6e439ec0df0d500476e86c825bd6712079cf27e",
           "source_agency": "Hong Kong Rating and Valuation Department (RVD)",
           "source_urls": [],
@@ -483,16 +483,14 @@
             "Annual(from 99)  按年(自99年起)"
           ],
           "required_sheets": [
-            "Monthly  按月",
-            "Annual(86-98)  按年(86-98)",
-            "Annual(from 99)  按年(自99年起)"
+            "Monthly  按月"
           ],
           "schema_notes": "Retain the agency workbook layout, sheet names and merged-cell positions. The parser reads positional columns rather than a tidy header row.",
           "acquisition_notes": "Retrieve the named RVD historical workbook manually. The original download URL was not preserved; retain its original XLS layout."
         },
         {
           "path": "data/raw/rvd/his_data_7.xls",
-          "description": "Office average prices by grade and district; monthly and annual analysis inputs.",
+          "description": "Office average prices by grade and district; monthly analysis input.",
           "sha256": "4a1d5bee86b93c0b99aee97c3cabcddccc9e554fa8fcf11d422a0a1888ef9f89",
           "source_agency": "Hong Kong Rating and Valuation Department (RVD)",
           "source_urls": [],
@@ -508,9 +506,7 @@
             "Annual(from 99)  按年(自99年起)"
           ],
           "required_sheets": [
-            "Monthly  按月",
-            "Annual(86-98)  按年(86-98)",
-            "Annual(from 99)  按年(自99年起)"
+            "Monthly  按月"
           ],
           "schema_notes": "Retain the agency workbook layout, sheet names and merged-cell positions. The parser reads positional columns rather than a tidy header row.",
           "acquisition_notes": "Retrieve the named RVD historical workbook manually. The original download URL was not preserved; retain its original XLS layout."

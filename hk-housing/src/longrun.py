@@ -74,7 +74,11 @@ def engle_granger(y: pd.Series, X: pd.DataFrame):
 
 
 def johansen(data: pd.DataFrame, det_order: int = 0, k_ar_diff: int = 2):
-    """Johansen trace & max-eig tests. det_order=0: intercept in coint relation."""
+    """Johansen trace & max-eig tests with k_ar_diff lagged differences.
+
+    det_order=0 is statsmodels' unrestricted constant (a constant in the VECM,
+    allowing linear trends in the levels); the critical values match that case.
+    """
     res = coint_johansen(data.dropna(), det_order, k_ar_diff)
     out = []
     for r in range(data.shape[1]):
@@ -88,6 +92,12 @@ def johansen(data: pd.DataFrame, det_order: int = 0, k_ar_diff: int = 2):
     # normalised first cointegrating vector (on the first variable)
     beta = res.evec[:, 0] / res.evec[0, 0]
     return pd.DataFrame(out).set_index("r"), pd.Series(beta, index=data.columns)
+
+
+# PSS (2001) Table CII(iii), case III (unrestricted intercept, no trend):
+# 5% bounds for the t-statistic on the lagged level of y, by regressor count
+PSS_T_BOUNDS_5PCT = {1: (-2.86, -3.22), 2: (-2.86, -3.53), 3: (-2.86, -3.78),
+                     4: (-2.86, -3.99)}
 
 
 def pss_bounds(stat: float, k: int, case: int = 3):
@@ -135,8 +145,10 @@ def ardl_bounds(y: pd.Series, X: pd.DataFrame, maxlag: int = 6, trend: str = "c"
     case = 3  # unrestricted intercept, no trend
     stat = float(uecm_res.bounds_test(case=case).stat)
     crit, pvals = pss_bounds(stat, k=exog.shape[1], case=case)
+    # PSS t-bounds statistic: OLS t-ratio on the lagged level of y in the UECM
+    t_stat = float(uecm_res.tvalues[f"{endog.name}.L1"])
     return {"ardl_order": ardl.ardl_order, "k": exog.shape[1], "bounds_stat": stat,
-            "bounds_crit": crit, "bounds_pvals": pvals,
+            "bounds_t": t_stat, "bounds_crit": crit, "bounds_pvals": pvals,
             "uecm_res": uecm_res, "ardl_res": ardl_res}
 
 
@@ -181,9 +193,10 @@ def ecm(y: pd.Series, X: pd.DataFrame, lr_resid: pd.Series, n_lags: int = 2,
     res = sm.OLS(aligned["dy"], sm.add_constant(aligned.drop(columns="dy"))).fit(
         cov_type="HAC", cov_kwds={"maxlags": hac_lags})
     lam = res.params["ect_l1"]
-    half_life = np.log(0.5) / np.log(1.0 + lam) if -1 < lam < 0 else np.inf
+    # no finite half-life unless -1 < λ < 0 (None keeps the JSON output strict)
+    half_life = float(np.log(0.5) / np.log(1.0 + lam)) if -1 < lam < 0 else None
     return {"res": res, "lambda": float(lam), "lambda_t": float(res.tvalues["ect_l1"]),
-            "half_life_months": float(half_life)}
+            "half_life_months": half_life}
 
 
 # ------------------------------------------------------------------- breaks
@@ -195,6 +208,10 @@ def bai_perron_breaks(x: pd.Series, max_breaks: int = 5, min_size: int = 24):
     Operates on the supplied series (typically the equilibrium error or
     log-returns). Pure change-in-mean specification, l2 cost — the
     Bai-Perron (1998) pure structural change model estimated by exact DP.
+    BIC counts m + 1 segment means and m break dates. When the selected count
+    equals max_breaks ("capped"), BIC would add more breaks, as it does for a
+    highly persistent series, so the dates describe that persistence rather
+    than a few discrete regime shifts.
     """
     z = x.dropna()
     v = z.values.astype(float)
@@ -218,11 +235,12 @@ def bai_perron_breaks(x: pd.Series, max_breaks: int = 5, min_size: int = 24):
                 rss += float(np.sum((seg - seg.mean()) ** 2))
                 start = e
             bkps = ends[:-1]
-        k = m + 1  # segment means
-        bic = n * np.log(rss / n + 1e-300) + k * np.log(n) + 2 * m * np.log(n)
+        n_params = (m + 1) + m  # segment means and break dates
+        bic = n * np.log(rss / n + 1e-300) + n_params * np.log(n)
         if bic < best["bic"]:
             best = {"n_breaks": m, "bic": bic, "bkps": bkps}
     best["break_dates"] = [z.index[b] for b in best["bkps"]]
+    best["capped"] = best["n_breaks"] == max_breaks
     best["sigma2_full"] = sigma2_full
     return best
 

@@ -31,6 +31,8 @@ plt.rcParams.update({
 
 MEASURE_LABELS = {"SSD": "SSD\nNov 10", "BSD": "BSD\nOct 12", "DSD": "DSD\nFeb 13",
                   "NRSD": "NRSD\nNov 16", "EASE": "All removed\nFeb 24"}
+# SSD, BSD and DSD fall within 28 months: stagger their labels on three rows
+LABEL_OFFSET_PT = {"BSD": -24, "DSD": -46}
 CRISES = [("1997-10-31", "Asian financial crisis"), ("2003-04-30", "SARS trough"),
           ("2008-09-30", "GFC"), ("2019-06-30", "Social unrest"),
           ("2020-01-31", "COVID-19"), ("2022-03-31", "Fed tightening")]
@@ -50,7 +52,8 @@ def _policy_vlines(ax, ymax_frac=0.97, label=True):
                    lw=0.9, ls="--", alpha=0.8)
         if label:
             ax.annotate(MEASURE_LABELS[name], xy=(d, ax.get_ylim()[1]),
-                        xytext=(2, -2), textcoords="offset points",
+                        xytext=(2, LABEL_OFFSET_PT.get(name, -2)),
+                        textcoords="offset points",
                         fontsize=6.5, va="top",
                         color="firebrick" if name != "EASE" else "seagreen")
 
@@ -97,21 +100,22 @@ def fig3_bsadf(panel):
         df = pd.read_csv(os.path.join(OUTD, f"bsadf_{name}.csv"),
                          index_col=0, parse_dates=True)
         res = json.load(open(os.path.join(OUTD, "bubbles.json")))[name]
-        # shade MC episodes (darker) and WB-only episodes (lighter)
-        for ep in res["episodes"]:
+        # shade the episodes dated against the Monte-Carlo 95% sequence
+        for i, ep in enumerate(res["episodes"]):
             ax.axvspan(pd.Timestamp(ep["start"]), pd.Timestamp(ep["end"]),
-                       color="lightsteelblue", alpha=0.65, lw=0)
+                       color="lightsteelblue", alpha=0.65, lw=0,
+                       label="dated episode (MC)" if i == 0 else None)
         ax.plot(df.index, df["bsadf"], lw=0.9, color="navy", label="BSADF$_t$")
         ax.plot(df.index, df["cv95"], lw=0.8, color="firebrick", ls="--",
                 label="95% CV (Monte Carlo)")
         ax.plot(df.index, df["cv95_wb"], lw=0.8, color="darkorange", ls=":",
-                label="95% CV (wild bootstrap)")
+                label="95% pointwise CV (wild bootstrap)")
         ax.set_ylim(-4, 3.2)
         ax.set_title(f"{title}:  GSADF = {res['gsadf']:.2f} "
                      f"(MC 95% CV {res['mc_cv']['0.95']:.2f}, "
                      f"wild-bootstrap p = {res['wb_pvalue']:.2f})", fontsize=9)
         if ax is axes[0]:
-            ax.legend(loc="lower right", frameon=False, ncol=3)
+            ax.legend(loc="lower right", frameon=False, ncol=2, fontsize=8)
     axes[-1].xaxis.set_major_locator(mdates.YearLocator(4))
     fig.suptitle("Backward sup-ADF date-stamping, k = 1, w₀ = 40 months",
                  y=0.995, fontsize=10)
@@ -122,19 +126,23 @@ def fig3_bsadf(panel):
 def fig4_equilibrium():
     eq = pd.read_csv(os.path.join(OUTD, "equilibrium_path_S3H.csv"),
                      index_col=0, parse_dates=True)
+    s3h = json.load(open(os.path.join(OUTD, "longrun.json")))["specs"]["S3H"]["full"]
+    beta = s3h["dols_beta"]["real_hibor"]
     fig, axes = plt.subplots(2, 1, figsize=(7.2, 5.2), sharex=True,
                              gridspec_kw={"height_ratios": [2, 1]})
     ax = axes[0]
-    ax.plot(eq.index, eq["lp_real"], lw=1.2, color="navy",
+    ax.plot(eq.index, eq["lpr"], lw=1.2, color="navy",
             label="log price-rent ratio (actual)")
     ax.plot(eq.index, eq["fitted"], lw=1.2, color="firebrick", ls="--",
-            label="long-run fitted: $-0.049 \\times$ real HIBOR (DOLS)")
+            label=f"long-run fitted: ${beta:.3f} \\times$ real HIBOR (DOLS)")
     ax.legend(loc="upper left", frameon=False)
     ax.set_title("Price-rent ratio vs its rate-implied equilibrium (S3-HIBOR)")
     ax2 = axes[1]
     ax2.fill_between(eq.index, eq["ect"], 0, color="seagreen", alpha=0.5)
     ax2.axhline(0, color="black", lw=0.7)
-    ax2.set_title("Equilibrium error (log deviation); half-life 59.4 months")
+    half_life = (f"{s3h['half_life_m']:.1f} months" if s3h["half_life_m"] is not None
+                 else "none (λ outside (−1, 0))")
+    ax2.set_title(f"Equilibrium error (log deviation); ECM half-life {half_life}")
     for a in axes:
         _policy_vlines(a, label=False)
     fig.tight_layout()
@@ -161,7 +169,8 @@ def fig5_lp_irfs():
         ax.axhline(0, color="black", lw=0.7)
         ax.set_title(title, fontsize=9)
         ax.set_xlabel("months after adoption")
-    fig.suptitle("Jordà local projections: dynamic response to policy events", y=0.99)
+    fig.suptitle("Jordà local projections: dynamic response to policy events\n"
+                 "(90% and 95% bands from placebo event dates)", y=0.995, fontsize=10)
     fig.tight_layout()
     _save(fig, "fig5_lp_irfs")
 

@@ -1,5 +1,5 @@
-system,n,k_ar,H0_rank<=,trace,cv_95,reject,beta_rate
-S1_lprA_rhibor,358,2,0,13.79504548027737,15.4943,False,0.0902877325192385
+system,n,k_ar,H0_rank<=,trace,cv_95,reject,lr_semi_elasticity
+S1_lprA_rhibor,358,2,0,13.79504548027737,15.4943,False,-0.0902877325192385
 S1_lprA_rhibor,358,2,1,1.7290942151202442,3.8415,False,
 S2_lprALL_rhibor,358,7,0,13.761860881595517,15.4943,False,
 S2_lprALL_rhibor,358,7,1,3.144497236700908,3.8415,False,

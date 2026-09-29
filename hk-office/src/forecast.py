@@ -1,22 +1,25 @@
 """
 forecast.py — Pseudo out-of-sample forecasting horse race.
 
-Rolling-origin evaluation of h-step-ahead forecasts of the log real price
-index. Models:
+Rolling-origin evaluation of h-step-ahead forecasts of the log real Grade A rent index.
+Models:
 
   RW     : random walk (no-change) — the benchmark to beat.
   RWD    : random walk with rolling drift.
   AR     : AR(p) on log-returns, p by AIC, iterated.
   ECM    : error-correction forecast — Δŷ uses the lagged equilibrium error
-           from a static OLS long-run relation re-estimated on each training window
-           (no look-ahead), iterated forward holding fundamentals at their
-           last observed values (no future fundamental values are supplied).
+           from a static OLS long-run relation re-estimated on each training
+           window, iterated forward holding the fundamentals at their values
+           at the origin. Only data up to the origin enter, so the caller must
+           pass fundamentals as known at each date (the housing study passes
+           income as published, not interpolated toward the next quarter).
   GBM    : gradient-boosted trees on lagged returns + fundamentals + ect,
            direct h-step forecast (sklearn HistGradientBoosting).
 
 Inference: Diebold-Mariano (1995) test with the Harvey-Leybourne-Newbold
-(1997) small-sample correction, squared-error loss, HAC variance with
-truncation lag h-1 (forecast errors at horizon h overlap by construction).
+(1997) small-sample correction, squared-error loss, HAC variance with a
+Bartlett kernel truncated at ceil(h/step) - 1 origin lags (h-step errors from
+origins `step` months apart overlap by construction).
 """
 from __future__ import annotations
 
@@ -124,8 +127,16 @@ def _fit_gbm_forecast(y_tr: pd.Series, X_tr: pd.DataFrame, h: int,
 
 def rolling_oos(y: pd.Series, X: pd.DataFrame, start_frac: float = 0.6,
                 horizons=(1, 3, 12), step: int = 1):
-    """Rolling-origin evaluation. Returns dict: horizon -> DataFrame of errors."""
+    """Rolling-origin evaluation. Returns dict: horizon -> DataFrame of errors.
+
+    Horizons are counted in rows, so the complete-case sample must be an
+    unbroken monthly calendar; a gap would silently shift the targets.
+    """
     data = pd.concat([y, X], axis=1).dropna()
+    calendar = pd.date_range(data.index[0], data.index[-1], freq="ME")
+    if len(calendar) != len(data) or not (data.index == calendar).all():
+        raise ValueError("rolling_oos needs consecutive months after dropping "
+                         "missing values")
     yv, Xv = data.iloc[:, 0], data.iloc[:, 1:]
     T = len(yv)
     t0 = int(T * start_frac)

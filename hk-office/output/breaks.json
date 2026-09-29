@@ -66,17 +66,37 @@
         "MongKok",
         "KwunTong"
       ],
+      "relatives": [
+        "SheungWan",
+        "CausewayBay",
+        "QuarryBay",
+        "TST",
+        "MongKok",
+        "KwunTong"
+      ],
       "start": "1999-01-31",
       "end": "2026-04-30",
       "n_pre2019": 240,
       "n_post2019": 88,
       "pre2019_mean": 0.24955121494537894,
       "post2019_mean": 0.3189704055337994,
+      "mean_change": 0.06941919058841958,
+      "mean_change_hac_t": 3.9042428033063,
+      "mean_change_hac_p": 9.452085092408411e-05,
+      "hac_lags": 12,
       "levene_p": 5.1339179574981095e-09
     },
     "sigma_balanced": {
       "districts": [
         "Central",
+        "SheungWan",
+        "CausewayBay",
+        "QuarryBay",
+        "TST",
+        "MongKok",
+        "KwunTong"
+      ],
+      "relatives": [
         "SheungWan",
         "CausewayBay",
         "QuarryBay",
@@ -90,11 +110,22 @@
       "n_post2019": 86,
       "pre2019_mean": 0.3344135201301761,
       "post2019_mean": 0.3179256937258472,
+      "mean_change": -0.016487826404328963,
+      "mean_change_hac_t": -1.358461609572956,
+      "mean_change_hac_p": 0.17431725633106976,
+      "hac_lags": 12,
       "levene_p": 0.8901914445010519
     },
     "sigma_balanced_ex_kwuntong": {
       "districts": [
         "Central",
+        "SheungWan",
+        "CausewayBay",
+        "QuarryBay",
+        "TST",
+        "MongKok"
+      ],
+      "relatives": [
         "SheungWan",
         "CausewayBay",
         "QuarryBay",
@@ -107,6 +138,10 @@
       "n_post2019": 86,
       "pre2019_mean": 0.23193527818318999,
       "post2019_mean": 0.22064192560712823,
+      "mean_change": -0.011293352576061344,
+      "mean_change_hac_t": -0.7008214392826828,
+      "mean_change_hac_p": 0.48341445666953875,
+      "hac_lags": 12,
       "levene_p": 0.06634483264180002
     },
     "beta": -0.17426512515339304,
@@ -114,34 +149,52 @@
     "beta_half_life_m": 3.619916627141751,
     "pairwise_eg": {
       "SheungWan": {
-        "eg_t": -10.436172842435377,
-        "eg_p": 2.007620011388907e-17,
-        "n": 326
+        "eg_t": -10.383899429425584,
+        "eg_p": 2.7079795273290437e-17,
+        "n": 328,
+        "start": "1999-01-31",
+        "end": "2026-04-30",
+        "months_filled": 2
       },
       "CausewayBay": {
         "eg_t": -5.489594007049369,
         "eg_p": 1.8804297247607504e-05,
-        "n": 328
+        "n": 328,
+        "start": "1999-01-31",
+        "end": "2026-04-30",
+        "months_filled": 0
       },
       "QuarryBay": {
-        "eg_t": -2.201148494327526,
-        "eg_p": 0.42377133528015865,
-        "n": 327
+        "eg_t": -2.2345837672868956,
+        "eg_p": 0.40660765450570513,
+        "n": 328,
+        "start": "1999-01-31",
+        "end": "2026-04-30",
+        "months_filled": 1
       },
       "TST": {
         "eg_t": -2.464409049396719,
         "eg_p": 0.2949871728997796,
-        "n": 328
+        "n": 328,
+        "start": "1999-01-31",
+        "end": "2026-04-30",
+        "months_filled": 0
       },
       "MongKok": {
-        "eg_t": -3.8457647393067247,
-        "eg_p": 0.011766072470021935,
-        "n": 289
+        "eg_t": -2.613575950289589,
+        "eg_p": 0.23139591971083745,
+        "n": 260,
+        "start": "2004-09-30",
+        "end": "2026-04-30",
+        "months_filled": 10
       },
       "KwunTong": {
         "eg_t": -3.4546024978039163,
         "eg_p": 0.03663760371130586,
-        "n": 159
+        "n": 159,
+        "start": "2013-02-28",
+        "end": "2026-04-30",
+        "months_filled": 0
       }
     },
     "premium_mean": 1.1042447212556683,

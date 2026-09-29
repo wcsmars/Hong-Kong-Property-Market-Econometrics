@@ -25,31 +25,36 @@
   },
   "gsadf_k0_lp_nom": {
     "gsadf": 2.932,
-    "cv95": 2.185,
-    "reject5": true
+    "bic_lag": 1,
+    "cv95_iid": 2.203,
+    "wb_pvalue_ar_null": 0.768
   },
   "gsadf_k0_lp_real": {
     "gsadf": 1.918,
-    "cv95": 2.185,
-    "reject5": false
+    "bic_lag": 1,
+    "cv95_iid": 2.203,
+    "wb_pvalue_ar_null": 0.922
   },
   "gsadf_k0_lpr": {
     "gsadf": 3.034,
-    "cv95": 2.185,
-    "reject5": true
+    "bic_lag": 1,
+    "cv95_iid": 2.203,
+    "wb_pvalue_ar_null": 0.279
   },
   "lpr_classA": {
     "gsadf": 1.964,
-    "cv95": 2.183,
+    "cv95": 2.384,
     "reject5": false,
+    "wb_pvalue": 0.297,
     "episodes": [
-      "2023-08-31\u21922025-08-31"
+      "2023-08-31\u21922025-04-30"
     ]
   },
   "lpr_classE": {
     "gsadf": 0.753,
-    "cv95": 2.183,
+    "cv95": 2.384,
     "reject5": false,
+    "wb_pvalue": 0.853,
     "episodes": []
   },
   "S3_hibor": {
@@ -81,18 +86,21 @@
   },
   "trunc_gsadf_lp_nom": {
     "gsadf": 2.188,
-    "cv95": 2.211,
-    "reject5": false
+    "cv95": 2.382,
+    "reject5": false,
+    "wb_pvalue": 0.339
   },
   "trunc_gsadf_lp_real": {
     "gsadf": 2.481,
-    "cv95": 2.211,
-    "reject5": true
+    "cv95": 2.382,
+    "reject5": true,
+    "wb_pvalue": 0.205
   },
   "trunc_gsadf_lpr": {
     "gsadf": 1.67,
-    "cv95": 2.211,
-    "reject5": false
+    "cv95": 2.382,
+    "reject5": false,
+    "wb_pvalue": 0.523
   },
   "trunc_S3H": {
     "n": 355,
@@ -101,13 +109,12 @@
   "lpr_k0_dating": {
     "gsadf": 3.034,
     "sup_date": "2024-09-30",
-    "wb_pvalue": 0.064,
+    "wb_pvalue": 0.279,
     "episodes": [
-      "2012-09-30\u21922015-12-31",
-      "2016-09-30\u21922018-11-30",
-      "2019-01-31\u21922019-08-31",
-      "2019-10-31\u21922022-07-31",
-      "2023-08-31\u21922026-01-31"
+      "2013-01-31\u21922015-10-31",
+      "2017-12-31\u21922018-08-31",
+      "2023-09-30\u21922024-10-31",
+      "2025-01-31\u21922025-08-31"
     ]
   }
 }

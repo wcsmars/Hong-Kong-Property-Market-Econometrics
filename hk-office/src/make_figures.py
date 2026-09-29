@@ -109,7 +109,7 @@ def fig2_caprate(panel):
     shares = [cs["share_rent_growth"], cs["share_riskfree"],
               cs["share_risk_premium"]]
     cis = [cs["ci_rent"], cs["ci_riskfree"], None]
-    names = ["expected\nrent growth", "risk-free\nrate news", "risk\npremium"]
+    names = ["expected\nrent growth", "real prime\nrate news", "premium over\nprime rate"]
     bars = ax.bar(names, shares, color=["#2ca02c", "#9467bd", "#d62728"],
                   alpha=0.85)
     for i, ci in enumerate(cis):
@@ -117,7 +117,7 @@ def fig2_caprate(panel):
             ax.errorbar(i, shares[i], yerr=[[shares[i] - ci[0]], [ci[1] - shares[i]]],
                         fmt="none", ecolor="k", capsize=3, lw=1)
     ax.axhline(0, color="k", lw=0.6)
-    ax.set_title("(c) Variance shares of log P/R\n(Campbell–Shiller VAR, bootstrap 95% CI)")
+    ax.set_title("(c) Variance shares of log P/R\n(Campbell–Shiller VAR, 95% CI)")
     fig.tight_layout()
     fig.savefig(os.path.join(FIG, "fig2_caprate_channel.png"))
     plt.close(fig)
@@ -125,7 +125,7 @@ def fig2_caprate(panel):
 
 def fig3_vacancy(ann):
     vac = json.load(open(os.path.join(OUT, "vacancy.json")))
-    vp = pd.read_csv(os.path.join(OUT, "vstar_path.csv"), index_col=0)
+    vp = pd.read_csv(os.path.join(OUT, "vstar_path.csv"), index_col=0).sort_index()
     q = pd.read_csv(os.path.join(PRO, "quarterly_indices.csv"), index_col=0)
     q.index = pd.PeriodIndex(q.index, freq="Q")
     q4 = q[q.index.quarter == 4].copy(); q4.index = q4.index.year
@@ -205,16 +205,16 @@ def fig5_regimes(panel, dist):
     ax = axes[0]
     y = 100 * panel["lr_real_A"].diff()
     ax.plot(y.index, y, color=C["A"], lw=0.7)
-    # identify crisis regime as the one with larger sigma
+    # shade the high-volatility regime (the one with the larger sigma)
     mskey = "p_regime0" if br["markov"]["sigma_regime0"] > br["markov"]["sigma_regime1"] \
         else None
-    p_crisis = pr["p_regime0"] if mskey else 1.0 - pr["p_regime0"]
-    ax.fill_between(pr.index, -12, 12, where=p_crisis > 0.5,
-                    color="#d62728", alpha=0.15, label="crisis regime (P>0.5)")
+    p_volatile = pr["p_regime0"] if mskey else 1.0 - pr["p_regime0"]
+    ax.fill_between(pr.index, -12, 12, where=p_volatile > 0.5,
+                    color="#d62728", alpha=0.15, label="volatile regime (P>0.5)")
     for bd in br["bp_rent_growth"]["break_dates"]:
         ax.axvline(pd.Timestamp(bd), color="k", ls=":", lw=1)
     ax.set_ylim(-12, 12)
-    ax.set_title("(a) Grade A real rent growth (%/m):\nMS crisis regime + Bai–Perron breaks")
+    ax.set_title("(a) Grade A real rent growth (%/m):\nMS volatile regime + Bai–Perron breaks")
     ax.legend(frameon=False)
 
     ax = axes[1]
@@ -225,10 +225,10 @@ def fig5_regimes(panel, dist):
     ax.plot(sig.index, sig["sigma_balanced_ex_kwuntong"], color="#1f77b4",
             lw=1.0, label="balanced, excl. Kwun Tong")
     ax.plot(sig.index, sig["sigma_balanced"], color="#444", lw=1.2,
-            label="balanced, 7 districts")
-    ax.axvline(pd.Timestamp("2019-06-30"), color="#d62728", ls=":", lw=1.2,
-               label="mid-2019")
-    ax.set_title("(b) σ-dispersion of district log rent\nrelatives (Grade A)")
+            label="balanced, all districts")
+    ax.axvline(pd.Timestamp("2019-01-01"), color="#d62728", ls=":", lw=1.2,
+               label="2019 split")
+    ax.set_title("(b) σ-dispersion of district log rents\nrelative to Central (Grade A)")
     ax.legend(frameon=False, fontsize=7)
 
     ax = axes[2]

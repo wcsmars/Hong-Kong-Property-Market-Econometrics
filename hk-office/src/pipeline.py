@@ -10,9 +10,9 @@ input_manifest.json at the repository root):
   RVD his_data_10.xls  : Grade A office rent indices, core districts
                          (monthly 1993+, quarterly 1989+, annual 1984+)
   RVD his_data_6.xls   : average RENTS  $/m2/month, grade x district
-                         (monthly 1999+, annual 1986+)
+                         (monthly sheet, 1999+)
   RVD his_data_7.xls   : average PRICES $/m2,       grade x district
-                         (monthly 1999+, annual 1986+)
+                         (monthly sheet, 1999+)
   RVD private_office.xls : completions / stock / vacancy / take-up by grade,
                          annual 1985+ (vacancy includes rates)
   HKMA API             : 1m HIBOR (1996-07+), BLR (1980+), composite rate
@@ -61,14 +61,18 @@ D10_SERIES = {
 
 
 def _coerce_num(v):
-    """RVD cell -> float. Handles '(58.1)' (<20 transactions), '*', '-', blanks."""
+    """RVD cell -> float. Handles '(58.1)' (<20 transactions), '*', '-', blanks,
+    and percentages stored as text ('9.5%' -> 0.095, as numeric rate cells)."""
     if pd.isna(v):
         return np.nan
     s = str(v).strip().replace("(", "").replace(")", "").replace("*", "").strip()
     if s in ("", "-", "N.A.", "n.a.", "@", "#"):
         return np.nan
+    scale = 1.0
+    if s.endswith("%"):
+        s, scale = s[:-1].strip(), 0.01
     try:
-        return float(s)
+        return float(s) * scale
     except ValueError:
         return np.nan
 
@@ -265,47 +269,6 @@ def parse_avg_monthly(path: str, prefix: str) -> pd.DataFrame:
     return _validate_monthly(out, path)
 
 
-def parse_avg_annual(path: str, prefix: str) -> pd.DataFrame:
-    """Annual averages: splice 'Annual(86-98)' and 'Annual(from 99)' sheets."""
-    frames = []
-    for sheet in ("Annual(86-98)  按年(86-98)", "Annual(from 99)  按年(自99年起)"):
-        df = pd.read_excel(path, sheet_name=sheet, header=None)
-        # locate grade anchor row: a row whose cells include 'A' and 'B' and 'C'
-        grade_row = None
-        for i in range(min(10, len(df))):
-            cells = {str(v).strip() for v in df.iloc[i].tolist()}
-            if {"A", "B", "C"} <= cells:
-                grade_row = i
-                break
-        if grade_row is None:
-            raise ValueError(f"{path} [{sheet}]: grade row not found")
-        anchors = {str(df.iat[grade_row, c]).strip(): c
-                   for c in range(df.shape[1])
-                   if str(df.iat[grade_row, c]).strip() in ("A", "B", "C")}
-        # districts sit at anchor + 3k within each grade block (both files)
-        recs = {}
-        for _, r in df.iterrows():
-            y = _coerce_year(r.iloc[1]) or _coerce_year(r.iloc[2])
-            if y is None:
-                continue
-            rec = {}
-            for g, anchor in anchors.items():
-                for dist, off in DISTRICT_OFFSETS.items():
-                    h = anchor + off
-                    val = np.nan
-                    for c in range(h, min(h + 3, len(r))):
-                        val = _coerce_num(r.iloc[c])
-                        if not np.isnan(val):
-                            break
-                    rec[f"{prefix}_{g}_{dist}"] = val
-            recs[y] = rec
-        frames.append(pd.DataFrame(recs).T)
-    out = pd.concat(frames).sort_index()
-    out = out[~out.index.duplicated(keep="last")]
-    out.index.name = "year"
-    return out.dropna(how="all")
-
-
 # ------------------------------------------------------------ private_office
 def parse_stockflow(path: str) -> pd.DataFrame:
     sheets = {
@@ -340,6 +303,16 @@ def parse_stockflow(path: str) -> pd.DataFrame:
     vr = res[[c for c in res.columns if c.startswith("vacrate")]]
     if (vr.dropna() < 0).any().any() or (vr.dropna() > 0.6).any().any():
         raise ValueError("vacancy rate outside [0, 0.6]")
+    # a printed rate must exist and agree with vacancy / stock (rates are
+    # rounded to 0.1pp), so an unparsed or misplaced cell cannot slip through
+    for g in grades:
+        implied = res[f"vac_{g}"] / res[f"stock_{g}"]
+        rate = res[f"vacrate_{g}"]
+        missing = rate.isna() & implied.notna()
+        if missing.any():
+            raise ValueError(f"vacrate_{g} missing for {list(res.index[missing])}")
+        if ((rate - implied).abs() > 0.001).any():
+            raise ValueError(f"vacrate_{g} disagrees with vac_{g} / stock_{g}")
     return res
 
 

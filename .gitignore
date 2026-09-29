@@ -37,6 +37,7 @@ private/
 
 # Local documents
 **/paper/
+**/assemble_paper.py
 **/papers/
 **/slides/
 *.tex

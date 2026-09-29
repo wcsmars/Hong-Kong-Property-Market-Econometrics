@@ -10,11 +10,14 @@ RVD measures vacancy at year-end).
 
 Extensions:
   (i)   delta-method and pairs-bootstrap CIs for v*;
-  (ii)  asymmetric adjustment: λ⁺ (v above v*) vs λ⁻ (v below v*), grid-MLE
-        with a wild-bootstrap test of λ⁺ = λ⁻;
+  (ii)  asymmetric adjustment: λ⁺ (v above v*) vs λ⁻ (v below v*), grid search
+        over v*, with a wild-bootstrap test of λ⁺ = λ⁻ against the symmetric
+        model with v* free;
   (iii) time-varying v*: local-level state-space model
             Δ ln R_t = λ (v*_t − v_{t−1}) + ε_t,   v*_t = v*_{t−1} + η_t,
-        estimated by MLE (Kalman filter/smoother, statsmodels MLEModel);
+        two-step: λ fixed at the OLS value, then Kalman MLE of the local level
+        (statsmodels UnobservedComponents, several starting values), with a
+        boundary likelihood-ratio test of a constant v* (var(η) = 0);
   (iv)  demand-shift controls (real GDP growth) to check robustness of v*.
 
 Outputs: output/vacancy.json, output/vstar_path.csv, output/vacancy_log.txt
@@ -27,7 +30,7 @@ import os
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-from statsmodels.tsa.statespace.mlemodel import MLEModel
+from scipy import stats
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 PRO = os.path.join(ROOT, "data", "processed")
@@ -101,6 +104,7 @@ def baseline(df: pd.DataFrame, g: str, n_boot: int = 5000, seed: int = 7) -> dic
         if r2.params["vlag"] < 0 else np.nan
     return {
         "grade": g, "n": int(res.nobs),
+        "first_year": int(d.index.min()), "last_year": int(d.index.max()),
         "lambda": float(lam), "lambda_t": float(-res.tvalues["vlag"]),
         "alpha": float(a), "r2": float(res.rsquared),
         "vstar": float(vstar), "vstar_se_delta": se_v,
@@ -113,78 +117,124 @@ def baseline(df: pd.DataFrame, g: str, n_boot: int = 5000, seed: int = 7) -> dic
 
 # ----------------------------------------------------------- asymmetry
 def asymmetry(df: pd.DataFrame, g: str, n_boot: int = 2000, seed: int = 11) -> dict:
-    """Δln R = λ⁺(v*−v)·1[v>v*] + λ⁻(v*−v)·1[v≤v*]; grid over v*."""
+    """Δln R = λ⁺(v*−v)·1[v>v*] + λ⁻(v*−v)·1[v≤v*]; grid over v*.
+
+    Under H0 (λ⁺ = λ⁻) the model is Δln R = α + βv with v* = α/−β still free,
+    so the restricted fit is OLS on [1, v]. The unrestricted model nests every
+    symmetric fit, so its SSR is the smaller of the grid optimum and the
+    restricted SSR. The wild bootstrap draws from the restricted fit and
+    re-estimates both models, threshold included, in every replication."""
     d = pd.DataFrame({"y": df[f"dlr_{g}"], "vlag": df[f"vac_{g}"].shift(1)}).dropna()
-    grid = np.linspace(d["vlag"].quantile(0.15), d["vlag"].quantile(0.85), 61)
+    y, v = d["y"].values, d["vlag"].values
+    grid = np.linspace(np.quantile(v, 0.15), np.quantile(v, 0.85), 61)
+    Xr = np.column_stack([np.ones(len(v)), v])
 
-    def fit(y, v, vs):
-        gap = vs - v
-        above = (v > vs).astype(float)
-        X = np.column_stack([gap * above, gap * (1 - above)])
-        beta, ssr = np.linalg.lstsq(X, y, rcond=None)[:2]
-        ssr = ssr[0] if len(ssr) else np.sum((y - X @ beta) ** 2)
-        return beta, ssr
+    def fit_restricted(yy):
+        beta = np.linalg.lstsq(Xr, yy, rcond=None)[0]
+        return beta, float(np.sum((yy - Xr @ beta) ** 2))
 
-    best = None
-    for vs in grid:
-        beta, ssr = fit(d["y"].values, d["vlag"].values, vs)
-        if best is None or ssr < best[2]:
-            best = (vs, beta, ssr)
-    vs_hat, (lam_p, lam_m), ssr_u = best
-    # restricted: single lambda
-    gap = vs_hat - d["vlag"].values
-    lam_r = float(np.linalg.lstsq(gap[:, None], d["y"].values, rcond=None)[0])
-    ssr_r = float(np.sum((d["y"].values - lam_r * gap) ** 2))
-    F = (ssr_r - ssr_u) / (ssr_u / (len(d) - 2))
-    # wild bootstrap under H0 (symmetric)
+    def fit_threshold(yy):
+        best = None
+        for vs in grid:
+            gap = vs - v
+            above = (v > vs).astype(float)
+            X = np.column_stack([gap * above, gap * (1 - above)])
+            beta = np.linalg.lstsq(X, yy, rcond=None)[0]
+            ssr = float(np.sum((yy - X @ beta) ** 2))
+            if best is None or ssr < best[2]:
+                best = (vs, beta, ssr)
+        return best
+
+    def f_stat(yy):
+        ssr_r = fit_restricted(yy)[1]
+        ssr_u = min(fit_threshold(yy)[2], ssr_r)
+        return (ssr_r - ssr_u) / (ssr_u / (len(yy) - 3))
+
+    vs_hat, (lam_p, lam_m), _ = fit_threshold(y)
+    beta_r, _ = fit_restricted(y)
+    F = f_stat(y)
+    fitted = Xr @ beta_r
+    resid = y - fitted
     rng = np.random.default_rng(seed)
-    resid = d["y"].values - lam_r * gap
-    Fb = []
-    for _ in range(n_boot):
-        w = rng.choice([-1.0, 1.0], len(resid))
-        yb = lam_r * gap + resid * w
-        bb, ssru_b = None, None
-        for vsb in grid:
-            beta_b, ssr_b = fit(yb, d["vlag"].values, vsb)
-            if ssru_b is None or ssr_b < ssru_b:
-                ssru_b, bb = ssr_b, beta_b
-        gap_b = vs_hat - d["vlag"].values
-        lam_rb = float(np.linalg.lstsq(gap_b[:, None], yb, rcond=None)[0])
-        ssrr_b = float(np.sum((yb - lam_rb * gap_b) ** 2))
-        Fb.append((ssrr_b - ssru_b) / (ssru_b / (len(d) - 2)))
-    p = float(np.mean(np.array(Fb) >= F))
+    Fb = np.array([f_stat(fitted + resid * rng.choice([-1.0, 1.0], len(resid)))
+                   for _ in range(n_boot)])
     return {
         "grade": g, "vstar_grid": float(vs_hat),
         "lambda_above": float(lam_p), "lambda_below": float(lam_m),
-        "F_sym": float(F), "p_wild": p, "n_boot": n_boot,
+        "vstar_symmetric": float(beta_r[0] / -beta_r[1]) if beta_r[1] < 0 else None,
+        "F_sym": float(F), "p_wild": float(np.mean(Fb >= F)), "n_boot": n_boot,
     }
 
 
 # ----------------------------------------------------- time-varying v*
-def time_varying(df: pd.DataFrame, g: str, lam: float) -> tuple[dict, pd.DataFrame]:
+def _fit_local_level(values: np.ndarray):
+    """Local-level fit from several starting values (highest likelihood kept)
+    and the constrained fit with a constant level (var(η) = 0)."""
+    from statsmodels.tsa.statespace.structural import UnobservedComponents
+    mod = UnobservedComponents(values, level="local level")
+    var_y = float(np.nanvar(values))
+    starts = [None] + [[var_y * (1 - r), var_y * r] for r in (1e-6, 0.01, 0.1, 0.5)]
+    res = max((mod.fit(start_params=sp, disp=False, maxiter=1000) for sp in starts),
+              key=lambda r: r.llf)
+    res_const = mod.fit_constrained({"sigma2.level": 0.0}, disp=False, maxiter=1000)
+    lr = 2 * (res.llf - res_const.llf)
+    # optimizer noise leaves LRs of order 1e-7 at the boundary: treat as zero
+    return res, res_const, lr if lr > 1e-6 else 0.0
+
+
+def time_varying(df: pd.DataFrame, g: str, lam: float, n_boot: int = 499,
+                 seed: int = 13) -> tuple[dict, pd.DataFrame]:
     """Profile-likelihood two-step: with λ fixed at the OLS estimate, the
     model Δln R_t = λ(v*_t − v_{t−1}) + ε, v*_t = v*_{t−1} + η reduces to a
     local-level model on the adjusted series y_t + λ·v_{t−1} = λ·v*_t + ε.
     (Free-λ MLE is unidentified at λ→0 on n≈40; the two-step pins λ to the
-    rent-adjustment speed and lets the Kalman smoother allocate the rest.)"""
-    from statsmodels.tsa.statespace.structural import UnobservedComponents
-    d = pd.DataFrame({"y": df[f"dlr_{g}"], "vlag": df[f"vac_{g}"].shift(1)}).dropna()
+    rent-adjustment speed and lets the Kalman smoother allocate the rest.)
+
+    The likelihood in var(η) can have an interior local mode as well as its
+    maximum at the var(η) = 0 boundary, so the fit starts from the default and
+    from several signal-to-noise ratios and keeps the highest likelihood. A
+    constant v* (var(η) = 0) is tested by a likelihood ratio whose null
+    distribution is simulated (parametric bootstrap: a constant level plus the
+    fitted noise, refitted by both models), because the LR for a random-walk
+    variance has a point mass at zero and no standard limit. A year missing
+    inside the sample stays in the model as a missing observation."""
+    d = pd.DataFrame({"y": df[f"dlr_{g}"], "vlag": df[f"vac_{g}"].shift(1)})
+    years = d.dropna().index
+    d = d.reindex(range(years.min(), years.max() + 1))
     yadj = d["y"] + lam * d["vlag"]
-    mod = UnobservedComponents(yadj.values, level="local level")
-    res = mod.fit(disp=False, maxiter=500)
+    values = yadj.to_numpy(float)
+    res, res_const, lr = _fit_local_level(values)
+    # null draws: the constrained fit's constant level plus N(0, its noise)
+    rng = np.random.default_rng(seed)
+    level0 = float(res_const.smoothed_state[0][0])
+    sd0 = float(np.sqrt(res_const.params[0]))
+    observed = ~np.isnan(values)
+    lr_null = []
+    for _ in range(n_boot):
+        sim = np.full(len(values), np.nan)
+        sim[observed] = level0 + sd0 * rng.standard_normal(observed.sum())
+        lr_null.append(_fit_local_level(sim)[2])
+    lr_null = np.array(lr_null)
     lvl = res.smoothed_state[0] / lam
     lvl_se = np.sqrt(res.smoothed_state_cov[0, 0]) / lam
     path = pd.DataFrame({"year": d.index, "vstar_smoothed": lvl,
                          "se": lvl_se}).set_index("year")
-    snr = float(res.params[1] / res.params[0]) if res.params[0] > 0 else np.inf
+    snr = float(res.params[1] / res.params[0]) if res.params[0] > 0 else None
     info = {
         "grade": g, "lambda_fixed": float(lam),
+        "n": int(yadj.notna().sum()), "first_year": int(d.index[0]),
+        "last_year": int(d.index[-1]),
         "var_eps": float(res.params[0]), "var_eta": float(res.params[1]),
         "signal_noise": snr, "loglike": float(res.llf),
+        "loglike_constant": float(res_const.llf),
+        "lr_constant": float(lr),
+        "p_constant": float((1 + np.sum(lr_null >= lr)) / (1 + n_boot)),
+        "lr_null_share_zero": float(np.mean(lr_null == 0.0)), "n_boot": n_boot,
         "vstar_first5_mean": float(lvl[:5].mean()),
         "vstar_last5_mean": float(lvl[-5:].mean()),
-        "vstar_2019": float(path.loc[2019, "vstar_smoothed"]) if 2019 in path.index else np.nan,
+        "vstar_2019": float(path.loc[2019, "vstar_smoothed"]) if 2019 in path.index else None,
         "vstar_end": float(lvl[-1]),
+        "vstar_se_mean": float(lvl_se.mean()),
         "converged": bool(res.mle_retvals.get("converged", True)),
     }
     return info, path
@@ -212,17 +262,23 @@ def main():
             paths[g] = path
             log(f"    TV v*: λ={tv['lambda_fixed']:.3f}  "
                 f"v*(first5)={tv['vstar_first5_mean']:.3%} → v*(last5)={tv['vstar_last5_mean']:.3%} "
-                f"(2019={tv['vstar_2019']:.3%}, end={tv['vstar_end']:.3%})")
+                f"(end={tv['vstar_end']:.3%}; var(η)={tv['var_eta']:.2e}, "
+                f"LR vs constant={tv['lr_constant']:.2f}, p={tv['p_constant']:.3f})")
         except Exception as e:
             log(f"    TV v* failed for {g}: {e}")
 
-    allp = pd.concat({g: p["vstar_smoothed"] for g, p in paths.items()}, axis=1)
-    allp.columns = [f"vstar_{g}" for g in allp.columns]
+    columns = {f"vstar_{g}": p["vstar_smoothed"] for g, p in paths.items()}
+    columns.update({f"se_{g}": p["se"] for g, p in paths.items()})
+    allp = pd.concat(columns, axis=1).sort_index()
+    allp = allp.reindex(range(allp.index.min(), allp.index.max() + 1))
+    allp.index.name = "year"
     vac = df[[c for c in df.columns if c.startswith("vac_")]]
     allp.join(vac).to_csv(os.path.join(OUT, "vstar_path.csv"))
 
     with open(os.path.join(OUT, "vacancy.json"), "w") as f:
-        json.dump(results, f, indent=2, default=float)
+        clean = json.loads(json.dumps(results, default=float),
+                           parse_constant=lambda _: None)
+        json.dump(clean, f, indent=2, allow_nan=False)
     with open(os.path.join(OUT, "vacancy_log.txt"), "w") as f:
         f.write("\n".join(LOG))
 

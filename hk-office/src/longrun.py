@@ -122,10 +122,13 @@ def johansen_table(panel: pd.DataFrame) -> pd.DataFrame:
                 "reject": bool(res.lr1[r] > res.cvt[r, 1]),
             })
         if name == "S1_lprA_rhibor":
-            # normalized cointegrating vector for the lead system
+            # first cointegrating vector normalized as lpr + b·rate ~ I(0), so
+            # the implied long-run semi-elasticity of lpr on the rate is −b
+            # (same sign convention as the ARDL and DOLS estimates); only
+            # meaningful where rank 0 is rejected
             beta = res.evec[:, 0]
             beta = beta / beta[0]
-            rows[-2]["beta_rate"] = float(beta[1])
+            rows[-2]["lr_semi_elasticity"] = float(-beta[1])
     return pd.DataFrame(rows)
 
 
@@ -252,8 +255,8 @@ def campbell_shiller(q: pd.DataFrame, panel: pd.DataFrame,
         cf = e_d @ B @ Zt.T
         rf = e_rf @ B @ Zt.T
         v = np.var(pd_obs)
-        s_rent = float(np.cov(pd_obs, cf)[0, 1] / v)
-        s_rf = float(-np.cov(pd_obs, rf)[0, 1] / v)
+        s_rent = float(np.cov(pd_obs, cf, ddof=0)[0, 1] / v)
+        s_rf = float(-np.cov(pd_obs, rf, ddof=0)[0, 1] / v)
         return s_rent, 1.0 - s_rent, s_rf
 
     s_rent, s_ret, s_rf = decompose(var, zm)
@@ -267,7 +270,8 @@ def campbell_shiller(q: pd.DataFrame, panel: pd.DataFrame,
         e = resid[idx]
         sim = list(fitted_lags)
         for t in range(len(e)):
-            nxt = sum(var.coefs[i] @ sim[-1 - i] for i in range(var.k_ar)) + e[t]
+            nxt = (var.intercept
+                   + sum(var.coefs[i] @ sim[-1 - i] for i in range(var.k_ar)) + e[t])
             sim.append(nxt)
         zb = pd.DataFrame(np.array(sim), columns=zm.columns)
         zb = zb - zb.mean()
@@ -326,11 +330,13 @@ def main():
         f"rho={cs['rho']:.4f}, n={cs['n']}):"
         f"\n  rent-growth share      = {cs['share_rent_growth']:.3f} {cs['ci_rent']}"
         f"\n  expected-return share  = {cs['share_expected_returns']:.3f} {cs['ci_returns']}"
-        f"\n    of which risk-free   = {cs['share_riskfree']:.3f} {cs['ci_riskfree']}"
-        f"\n    of which premium     = {cs['share_risk_premium']:.3f}")
+        f"\n    of which real prime rate (BLR) = {cs['share_riskfree']:.3f} {cs['ci_riskfree']}"
+        f"\n    of which premium over BLR      = {cs['share_risk_premium']:.3f}")
 
     with open(os.path.join(OUT, "longrun.json"), "w") as f:
-        json.dump(results, f, indent=2, default=float)
+        clean = json.loads(json.dumps(results, default=float),
+                           parse_constant=lambda _: None)
+        json.dump(clean, f, indent=2, allow_nan=False)
     with open(os.path.join(OUT, "longrun_log.txt"), "w") as f:
         f.write("\n".join(LOG))
 

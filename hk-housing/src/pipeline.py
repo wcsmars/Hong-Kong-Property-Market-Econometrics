@@ -14,6 +14,17 @@ Sources (required input paths and schemas are listed in input_manifest.json):
 
 Output: data/processed/panel.csv — one row per month with raw and constructed
 variables; constructions documented inline.
+
+Two constructions matter for interpretation:
+  * RVD stock figures exclude village houses from 2003 on. Year-end stock
+    before 2003 is rescaled to the new definition with the 2003 ratio
+    (end-2003 stock less 2003 completions, over end-2002 stock), so the
+    definition change is not read as a fall in supply.
+  * Quarterly median income is interpolated to months for the in-sample
+    models (linc_real). The forecasts use linc_real_rt instead: each month
+    holds the latest quarter treated as published by then (INCOME_LAG_MONTHS
+    after the quarter ends), carried forward, so no forecast origin sees a
+    later quarter.
 """
 from __future__ import annotations
 
@@ -25,6 +36,9 @@ import pandas as pd
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 RAW = os.path.join(ROOT, "data", "raw")
 OUT = os.path.join(ROOT, "data", "processed")
+# months after a quarter ends before its median income is treated as known
+# (a conservative assumption about the release timing)
+INCOME_LAG_MONTHS = 2
 
 CLASS_COL_CANDIDATES = {
     "A": (7, 8), "B": (10, 11), "C": (13, 14), "D": (16, 17), "E": (19, 20),
@@ -117,6 +131,17 @@ def parse_rvd_stock(path: str) -> pd.DataFrame:
     return out
 
 
+def splice_stock(stock_a: pd.DataFrame) -> tuple[pd.Series, float]:
+    """Year-end stock on the 2003+ definition (village houses excluded).
+
+    Years before 2003 are scaled by (stock_2003 − completions_2003) / stock_2002,
+    the end-2002 stock the new definition implies. Returns (stock, factor).
+    """
+    st = stock_a["stock"].dropna()
+    factor = float((st.loc[2003] - stock_a.loc[2003, "completions"]) / st.loc[2002])
+    return st.where(st.index >= 2003, st * factor), factor
+
+
 def load_cpi() -> pd.Series:
     df = pd.read_csv(os.path.join(RAW, "censtatd", "censtatd_cpi_composite_monthly.csv"))
     s = pd.Series(df["cpi_composite_index"].values,
@@ -154,8 +179,8 @@ def load_fred() -> pd.DataFrame:
     return s.to_frame().sort_index()
 
 
-def load_income() -> pd.Series:
-    """Median monthly domestic household income, quarterly → monthly (linear)."""
+def load_income_quarterly() -> pd.Series:
+    """Median monthly domestic household income, one value per quarter end."""
     path = os.path.join(RAW, "censtatd",
                         "censtatd_median_household_income_quarterly.csv")
     df = pd.read_csv(path)
@@ -163,8 +188,22 @@ def load_income() -> pd.Series:
                          freq="Q").to_timestamp(how="end").normalize()
     s = pd.Series(df["median_monthly_household_income_hkd"].astype(float).values,
                   index=idx, name="med_income")
-    s = s[~s.index.duplicated()].sort_index()
-    return s.resample("ME").interpolate("linear")
+    return s[~s.index.duplicated()].sort_index()
+
+
+def load_income() -> pd.Series:
+    """Median income, quarterly → monthly (linear between quarter ends)."""
+    return load_income_quarterly().resample("ME").interpolate("linear")
+
+
+def real_time_income(lag_months: int = INCOME_LAG_MONTHS) -> pd.Series:
+    """Median income as known at each month end: the latest quarter whose
+    figure is treated as published (lag_months after the quarter ends),
+    carried forward. Uses no later quarter, unlike the interpolated series."""
+    q = load_income_quarterly()
+    known = pd.Series(q.values, index=q.index + pd.offsets.MonthEnd(lag_months),
+                      name="med_income_rt")
+    return known.resample("ME").ffill()
 
 
 def load_population() -> pd.Series:
@@ -196,12 +235,15 @@ def build_panel(start="1993-01-01") -> pd.DataFrame:
     panel["cpi"] = cpi
     panel = panel.join(hkma).join(fred)
 
-    # annual year-end stock → monthly by log-linear interpolation
-    st = stock_a["stock"].dropna()
+    # annual year-end stock → monthly by log-linear interpolation, with the
+    # pre-2003 years spliced onto the 2003+ definition (no village houses)
+    st, splice = splice_stock(stock_a)
     st.index = pd.to_datetime(st.index.astype(str)) + pd.offsets.YearEnd(0)
     panel["stock"] = np.exp(np.log(st).resample("ME").interpolate("linear"))
+    panel.attrs["stock_splice_pre2003"] = splice
 
     panel["med_income"] = load_income()
+    panel["med_income_rt"] = real_time_income()
     panel["population"] = load_population()
     lr = load_landreg()
     panel["sp_agreements"] = lr["residential_agreements_count"]
@@ -222,6 +264,7 @@ def build_panel(start="1993-01-01") -> pd.DataFrame:
     panel["lp_nom"] = np.log(panel["px_ALL"])
     panel["lstock"] = np.log(panel["stock"])
     panel["linc_real"] = np.log(panel["med_income"] / panel["cpi"])
+    panel["linc_real_rt"] = np.log(panel["med_income_rt"] / panel["cpi"])
     panel["lvol"] = np.log(panel["sp_agreements"])
     return panel
 

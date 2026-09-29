@@ -1,18 +1,21 @@
 """
-stockflow.py — Stock-flow supply, office demand, and the
-DiPasquale-Wheaton four-quadrant synthesis with absorption simulation.
+stockflow.py — Stock-flow supply, office demand, and a stock-flow
+absorption simulation (DiPasquale-Wheaton space-market logic, no price block).
 
 (a) Supply: completions respond to lagged real capital values
         ln comp_t = a + b·ln(P/CPI)_{t−k} + c·real_rate_{t−k} + e,
-    lag k selected over {2,3,4} by AIC (construction lag); elasticity b.
+    lag k (construction lag) selected over {2,3,4} by AIC on a common sample,
+    then re-estimated on its full sample; elasticity b.
 (b) Demand: occupied stock OS_t = S_t (1 − v_t);
         ln OS_t = α + β_y ln GDP_t + β_r ln(R/CPI)_t + u_t   (long run),
     estimated by DOLS, with an ECM for short-run absorption.
-(c) Four-quadrant simulation, 2026-2035, from end-2025 initial conditions:
-    demand grows with GDP (scenarios), rents adjust per vacancy.py's estimated
-    (λ, v*), prices = rent / cap-rate (scenarios anchored on recent Grade A yields),
-    completions follow the estimated supply response with a 3-year lag and
-    a pipeline floor. Output: vacancy paths and years-to-normalisation.
+(c) Stock-flow simulation, 2026-2035, from end-2025 initial conditions.
+    Completions are exogenous scenarios (30%, 100% or 150% of the 2021-25
+    mean), because (a) finds no positive price response. Real rents adjust to
+    the gap between vacancy and v* at vacancy.py's total-market (λ, v*).
+    Occupied stock moves toward the demand schedule at speed κ (the ECM speed,
+    floored at 0.10), under three GDP growth scenarios. Prices are not
+    simulated. Output: vacancy paths and the year vacancy first reaches v*.
 
 Outputs: output/stockflow.json, output/simulation_paths.csv,
          output/stockflow_log.txt
@@ -31,6 +34,7 @@ ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 PRO = os.path.join(ROOT, "data", "processed")
 OUT = os.path.join(ROOT, "output")
 LOG: list[str] = []
+KAPPA_FLOOR = 0.1   # minimum demand adjustment speed used in the simulation
 
 
 def log(msg: str):
@@ -56,21 +60,26 @@ def build() -> pd.DataFrame:
 
 
 # ----------------------------------------------------------------- supply
-def supply_equation(df: pd.DataFrame) -> dict:
-    best = None
-    for k in (2, 3, 4):
-        d = pd.DataFrame({
+def supply_equation(df: pd.DataFrame, lags: tuple[int, ...] = (2, 3, 4)) -> dict:
+    def data(k):
+        return pd.DataFrame({
             "lcomp": df["lcomp"],
             "lrealp_lag": df["lrealp"].shift(k),
             "real_blr_lag": df["real_blr"].shift(k),
         }).dropna()
-        res = sm.OLS(d["lcomp"], sm.add_constant(d[["lrealp_lag", "real_blr_lag"]])
-                     ).fit(cov_type="HAC", cov_kwds={"maxlags": 2})
-        if best is None or res.aic < best[1].aic:
-            best = (k, res, d)
-    k, res, d = best
+
+    def fit(d):
+        return sm.OLS(d["lcomp"], sm.add_constant(d[["lrealp_lag", "real_blr_lag"]])
+                      ).fit(cov_type="HAC", cov_kwds={"maxlags": 2})
+
+    # AIC is only comparable on one sample: use the years every lag covers
+    common = data(max(lags)).index
+    aic = {k: float(fit(data(k).loc[common]).aic) for k in lags}
+    k = min(aic, key=aic.get)
+    d = data(k)
+    res = fit(d)
     return {
-        "lag_years": k, "n": int(res.nobs),
+        "lag_years": k, "aic_common_sample": aic, "n": int(res.nobs),
         "price_elasticity": float(res.params["lrealp_lag"]),
         "price_t": float(res.tvalues["lrealp_lag"]),
         "rate_semi": float(res.params["real_blr_lag"]),
@@ -116,10 +125,10 @@ def demand_dols(df: pd.DataFrame, leads: int = 2) -> dict:
 def simulate(df: pd.DataFrame, sup: dict, dem: dict, q2: dict,
              horizon: int = 10, adj_speed: float | None = None,
              demand_recovery_years: int = 0) -> pd.DataFrame:
-    """Four-quadrant forward simulation from end-2025 conditions.
+    """Stock-flow forward simulation from end-2025 conditions.
 
     adj_speed: override for the demand partial-adjustment speed κ (default:
-    −ECM coefficient, floored at 0.1). demand_recovery_years > 0 makes the
+    −ECM coefficient, floored at KAPPA_FLOOR). demand_recovery_years > 0 makes the
     absorbed 2025 demand residual TRANSITORY: the gap between end-2025
     occupancy and the historical long-run schedule decays linearly to zero
     over that many years instead of being treated as a permanent level shift.
@@ -179,7 +188,7 @@ def simulate(df: pd.DataFrame, sup: dict, dem: dict, q2: dict,
             os_target = np.exp(c_now + dem["income_elasticity"] * lgdp_
                                + dem["rent_elasticity"] * lrr_)
             adj = adj_speed if adj_speed is not None \
-                else min(max(-dem["ecm_coef"], 0.1), 1.0)
+                else min(max(-dem["ecm_coef"], KAPPA_FLOOR), 1.0)
             OS_cur = OS_cur * (os_target / OS_cur) ** adj
             OS_cur = min(OS_cur, 0.98 * S_)
             v_ = 1.0 - OS_cur / S_
@@ -214,7 +223,7 @@ def main():
     q2 = {"lambda": q2b["lambda"], "vstar": q2b["vstar"],
           "cap_anchor": cap_anchor}
     log(f"sim params: λ={q2['lambda']:.2f}, v*={q2['vstar']:.3f}, "
-        f"cap anchor (last-12m Grade A yield)={cap_anchor:.4f}")
+        f"cap anchor (last-12m Grade A yield, reported only)={cap_anchor:.4f}")
 
     sim = simulate(df, sup, dem, q2)
     sim.to_csv(os.path.join(OUT, "simulation_paths.csv"), index=False)
@@ -254,6 +263,9 @@ def main():
 
     results = {"supply": sup, "demand": dem, "sim_params": q2,
                "pipeline_mean_5y": float(df["comp"].dropna().tail(5).mean()),
+               "pipeline_years": [int(df["comp"].dropna().tail(5).index.min()),
+                                  int(df["comp"].dropna().tail(5).index.max())],
+               "kappa_floor": KAPPA_FLOOR,
                "resid_2025_logpts": q2["resid_2025"],
                "scenarios": summary.to_dict("records"),
                "kappa_upper": kappa_hi,

@@ -77,33 +77,36 @@ def t3_cointegration():
            f"[{cs['ci_rent'][0]:.2f}, {cs['ci_rent'][1]:.2f}]; "
            f"expected returns {cs['share_expected_returns']:.2f} "
            f"[{cs['ci_returns'][0]:.2f}, {cs['ci_returns'][1]:.2f}], "
-           f"of which risk-free {cs['share_riskfree']:.2f} "
+           f"of which real prime rate (BLR) {cs['share_riskfree']:.2f} "
            f"[{cs['ci_riskfree'][0]:.2f}, {cs['ci_riskfree'][1]:.2f}] and "
-           f"risk premium {cs['share_risk_premium']:.2f} "
+           f"premium over the prime rate {cs['share_risk_premium']:.2f} "
            f"({cs['n_boot_ok']} bootstrap replications).")
     w("t3_cointegration.md", md)
 
 
 def t4_vacancy():
     v = json.load(open(os.path.join(OUT, "vacancy.json")))
-    md = ("| grade | λ (t) | v* | delta-SE | bootstrap 95% | v* (GDP ctrl) | "
-          "λ⁺ / λ⁻ (wild-p) | TV v*: first5 → last5 |\n"
-          "|---|---|---|---|---|---|---|---|\n")
+    md = ("| grade | sample (n) | λ (t) | v* | delta-SE | bootstrap 95% | v* (GDP ctrl) | "
+          "λ⁺ / λ⁻ (wild-p) | TV v*: first5 → last5 (p const) |\n"
+          "|---|---|---|---|---|---|---|---|---|\n")
     tv = {t["grade"]: t for t in v["time_varying"]}
     asym = {a["grade"]: a for a in v["asymmetry"]}
     for b in v["baseline"]:
         g = b["grade"]; a = asym[g]; t = tv.get(g)
-        md += (f"| {g} | {b['lambda']:.2f} ({b['lambda_t']:.2f}) | "
+        md += (f"| {g} | {b['first_year']}–{b['last_year']} ({b['n']}) | "
+               f"{b['lambda']:.2f} ({b['lambda_t']:.2f}) | "
                f"{b['vstar']:.1%} | ±{b['vstar_se_delta']:.1%} | "
                f"[{b['vstar_ci_boot'][0]:.1%}, {b['vstar_ci_boot'][1]:.1%}] | "
                f"{b['vstar_gdp_control']:.1%} | "
                f"{a['lambda_above']:.2f} / {a['lambda_below']:.2f} ({a['p_wild']:.2f}) | "
-               + (f"{t['vstar_first5_mean']:.1%} → {t['vstar_last5_mean']:.1%} |"
-                  if t else "– |") + "\n")
-    md += ("\nΔln(real rent, Q4/Q4) on lagged year-end vacancy, annual 1986–2025 "
-           "(n=39). HAC(2) t-stats; pairs bootstrap 5,000 reps; asymmetry by "
-           "grid-search threshold with 2,000 wild-bootstrap reps; time-varying "
-           "v* from a local-level Kalman smoother with λ fixed at the OLS value.")
+               + (f"{t['vstar_first5_mean']:.1%} → {t['vstar_last5_mean']:.1%} "
+                  f"({t['p_constant']:.2f}) |" if t else "– |") + "\n")
+    md += ("\nΔln(real rent, Q4/Q4) on lagged year-end vacancy, annual. HAC(2) "
+           "t-stats; pairs bootstrap 5,000 reps (draws with λ > 0); asymmetry by "
+           "grid-search threshold against the symmetric model with v* free, "
+           "2,000 wild-bootstrap reps; time-varying v* from a local-level Kalman "
+           "smoother with λ fixed at the OLS value, with the boundary LR p-value "
+           "for a constant v*.")
     w("t4_vacancy.md", md)
 
 
@@ -132,13 +135,14 @@ def t5_stockflow():
         return sc.to_markdown(index=False)
 
     md += fmt(s["scenarios"])
+    y0, y1 = s["pipeline_years"]
     md += (f"\n\nPipeline base = mean completions of the last five observed "
-           f"years (2021–2025), {s['pipeline_mean_5y']:,.0f} m²/yr; absorbed "
-           f"end-2025 demand residual {s['resid_2025_logpts']:+.3f} log "
-           "points (occupancy ~7.6% below the historical schedule, treated "
-           "as permanent in the baseline).\n\n"
+           f"years ({y0}–{y1}), {s['pipeline_mean_5y']:,.0f} m²/yr; absorbed "
+           f"end-{y1} demand residual {s['resid_2025_logpts']:+.3f} log "
+           f"points (occupancy {1 - np.exp(s['resid_2025_logpts']):.1%} below the "
+           "historical schedule, treated as permanent in the baseline).\n\n"
            f"**Sensitivity — adjustment speed at the 95% upper bound "
-           f"(κ = {s['kappa_upper']:.3f} vs floor 0.10):**\n\n")
+           f"(κ = {s['kappa_upper']:.3f} vs floor {s['kappa_floor']:.2f}):**\n\n")
     md += fmt(s["scenarios_kappa_upper"])
     md += ("\n\n**Sensitivity — transitory demand shock "
            "(2025 residual decays linearly over 5 years):**\n\n")
@@ -155,21 +159,26 @@ def t6_breaks():
                f"{', '.join(r['break_dates'])}; segment means "
                f"{[round(m, 4) for m in r['segment_means']]} (n={r['n_obs']})\n")
     m = b["markov"]
+    # label the regimes by volatility, as fig5 does
+    calm, volatile = ("0", "1") if m["sigma_regime0"] <= m["sigma_regime1"] else ("1", "0")
     md += (f"\n**Markov-switching (Grade A real rent growth, %/m):** calm regime "
-           f"μ={m['mu_regime0_pct_m']:.2f}, σ={m['sigma_regime0']:.2f} "
-           f"(expected duration {m['exp_duration0_m']:.0f}m); crisis regime "
-           f"μ={m['mu_regime1_pct_m']:.2f}, σ={m['sigma_regime1']:.2f} "
-           f"({m['exp_duration1_m']:.0f}m); n={m['n']}.\n")
+           f"μ={m[f'mu_regime{calm}_pct_m']:.2f}, σ={m[f'sigma_regime{calm}']:.2f} "
+           f"(expected duration {m[f'exp_duration{calm}_m']:.0f}m); volatile regime "
+           f"μ={m[f'mu_regime{volatile}_pct_m']:.2f}, σ={m[f'sigma_regime{volatile}']:.2f} "
+           f"({m[f'exp_duration{volatile}_m']:.0f}m); n={m['n']}.\n")
     c = b["convergence"]
 
     def sigma(key: str, label: str) -> str:
         s = c[key]
         return (f"{label} ({len(s['districts'])} districts, {s['start'][:7]}+) "
                 f"{s['pre2019_mean']:.3f} → {s['post2019_mean']:.3f} "
-                f"(Levene p={s['levene_p']:.4f})")
+                f"(HAC p={s['mean_change_hac_p']:.3f}; Levene p={s['levene_p']:.3f})")
 
-    md += (f"\n**District convergence (Grade A average rents; five districts "
-           f"from 1999-01, Mong Kok with gaps, Kwun Tong from 2013-02):** "
+    md += (f"\n**District convergence (Grade A average rents; Central and five "
+           f"other districts from 1999-01, with gaps in Mong Kok, Sheung Wan and "
+           f"Quarry Bay; Kwun Tong from 2013-02). σ is the cross-sectional std of "
+           f"the other districts' log rents relative to Central; the HAC p tests "
+           f"the change in its mean, Levene's p only its variability:** "
            f"σ-dispersion pre-2019 → 2019+: "
            f"{sigma('sigma_balanced', 'balanced panel')}; "
            f"{sigma('sigma_balanced_ex_kwuntong', 'balanced, excluding Kwun Tong')}; "
@@ -177,8 +186,10 @@ def t6_breaks():
            f"β-convergence {c['beta']:.3f} (t={c['beta_t']:.1f}, half-life "
            f"{c['beta_half_life_m']:.0f}m). Central/KwunTong premium: mean "
            f"{c['premium_mean']:.3f} log-pts, ADF p={c['premium_adf_p']:.2f}.\n\n"
-           "Pairwise Engle–Granger with Central (p-values): "
-           + ", ".join(f"{d} {v['eg_p']:.3f}" for d, v in c["pairwise_eg"].items()))
+           "Pairwise Engle–Granger with Central (p-values; longest run of "
+           "consecutive months after filling gaps of up to three months): "
+           + ", ".join(f"{d} {v['eg_p']:.3f} ({v['start'][:7]}–{v['end'][:7]})"
+                       for d, v in c["pairwise_eg"].items()))
     w("t6_breaks.md", md)
 
 
