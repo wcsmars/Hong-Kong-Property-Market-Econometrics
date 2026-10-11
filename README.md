@@ -274,7 +274,8 @@ The full raw and processed datasets are not included. The
 [input manifest](input_manifest.json) lists the **14 housing** and **13 office**
 inputs, their required paths, schemas, source agencies, and snapshot hashes.
 Sources are the Rating and Valuation Department, HKMA, Census and Statistics
-Department, Land Registry, FRED, and World Bank.
+Department, Land Registry, FRED, and World Bank; see
+[Data sources and acknowledgements](#data-sources-and-acknowledgements).
 
 Place your inputs at the listed paths under each study's `data/raw/` folder.
 Some inputs are normalized CSVs: downloading a similarly named source file
@@ -390,6 +391,52 @@ autoregressive benchmark, whose maximum-likelihood ARIMA fits differ by up to
 5e-4 under numpy 2. The office Markov-switching fit seeds its random
 start-parameter search, so reruns reproduce it exactly; 31 different seeds
 reach the same maximum likelihood to within 1.3e-6.
+
+## Data sources and acknowledgements
+
+No source dataset is redistributed here. The saved results and figures
+contain series that the author derived from the official statistics below,
+such as log, deflated or rebased price and rent indices, vacancy rates and
+interest rates. Those derived series are the author's own calculations, not
+official statistics, and no endorsement by any source is implied.
+Intellectual property rights in the underlying data belong to the sources
+named. Everything is provided as is; refer to the sources for authoritative
+and revised figures. Inputs are a June 2026 snapshot.
+
+- **Rating and Valuation Department, Government of the Hong Kong Special
+  Administrative Region**: Property Market Statistics (price and rental
+  indices, average rents and prices, completions, stock, vacancy and
+  take-up), from the
+  [department's statistics pages](https://www.rvd.gov.hk/en/publications/property_market_statistics.html),
+  also listed on
+  [DATA.GOV.HK](https://data.gov.hk/en-data/dataset/hk-rvd-tsinfo_rvd-property-market-statistics).
+- **Census and Statistics Department, Government of the Hong Kong Special
+  Administrative Region** (www.censtatd.gov.hk): Composite Consumer Price
+  Index, median monthly domestic household income and mid-year population.
+- **Hong Kong Monetary Authority**: Monthly Statistical Bulletin interest
+  rates (interbank rates, Best Lending Rate, composite interest rate) and
+  the Residential Mortgage Survey, through the
+  [HKMA open API](https://apidocs.hkma.gov.hk/). The Hong Kong dollar
+  interest settlement rates (HIBOR) are sourced from and owned by The Hong
+  Kong Association of Banks.
+- **The Land Registry, Government of the Hong Kong Special Administrative
+  Region**: monthly statistics on agreements for sale and purchase of
+  residential units, also listed on
+  [DATA.GOV.HK](https://data.gov.hk/en-data/dataset/hk-lr-data5-landreg).
+- **Board of Governors of the Federal Reserve System (US)**, H.15 Selected
+  Interest Rates: Federal Funds Effective Rate
+  ([FEDFUNDS](https://fred.stlouisfed.org/series/FEDFUNDS)) and the 10-year
+  Treasury constant-maturity yield
+  ([GS10](https://fred.stlouisfed.org/series/GS10)), retrieved from FRED,
+  Federal Reserve Bank of St. Louis.
+- **The World Bank**: World Development Indicators: GDP (constant LCU),
+  Hong Kong SAR, China
+  ([NY.GDP.MKTP.KN](https://data.worldbank.org/indicator/NY.GDP.MKTP.KN?locations=HK)),
+  licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+The Hong Kong Government datasets are published under the
+[DATA.GOV.HK terms](https://data.gov.hk/en/terms-and-conditions) and each
+department's own notices. Anyone reusing the inputs should check those terms.
 
 ## Files
 
